@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fibrum-pdf"
-version = "1.0.2"
+version = "1.0.3"
 description = "A fast PDF extractor; a 500 pages/s alternative to Marker, Docling, PyMUPDF4LLM & others."
 authors = [{ name = "Adit Bajaj" }]
 readme = "README.md"
