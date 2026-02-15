@@ -1,6 +1,7 @@
-"""block to markdown conversion."""
+"""Block to Markdown conversion."""
 
 from __future__ import annotations
+
 import logging
 import re
 from typing import Any
@@ -20,7 +21,8 @@ STYLES = [
 
 
 def _normalize_bullets(text: str) -> str:
-    out, i = [], 0
+    out: list[str] = []
+    i: int = 0
     while i < len(text):
         if text[i] in BULLETS:
             out.append("- ")
@@ -82,7 +84,7 @@ def _table(rows: list[dict[str, Any]]) -> str:
     if not rows:
         return ""
     hdr = [_cell_text(c) for c in rows[0].get("cells", [])]
-    lines = []
+    lines: list[str] = []
     if any(hdr):
         lines += [
             "| " + " | ".join(hdr) + " |",
@@ -97,7 +99,7 @@ def _table(rows: list[dict[str, Any]]) -> str:
 
 def _list(block: dict[str, Any], text: str) -> str:
     if items := block.get("items"):
-        lines = []
+        lines: list[str] = []
         for item in items:
             if t := _join_spans(item.get("spans", [])):
                 ind = "  " * item.get("indent", 0)
@@ -112,12 +114,12 @@ def _list(block: dict[str, Any], text: str) -> str:
 
 
 def block_to_markdown(block: dict[str, Any]) -> str:
-    typ = block.get("type", "")
+    type = block.get("type", "")
     text = block.get("text", "").strip() or _join_spans(block.get("spans", []))
     if text:
         text = _normalize_bullets(text)
 
-    match typ:
+    match type:
         case "heading" if text:
             return f"{'#' * block.get('level', 1)} {text}\n"
         case "paragraph" | "text" if text:
@@ -129,5 +131,5 @@ def block_to_markdown(block: dict[str, Any]) -> str:
         case "figure":
             return f"![Figure]({block.get('text', 'figure')})\n"
         case _:
-            log.debug("skipping block type=%s", typ)
+            log.debug("skipping block type=%s", type)
             return ""

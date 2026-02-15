@@ -1,9 +1,9 @@
-"""mupdf json extraction bindings."""
-
 from __future__ import annotations
+
 import logging
 from importlib import metadata
-from .api import ExtractionError, to_json, ConversionResult
+
+from .api import ConversionResult, ExtractionError, to_json
 from .models import Block, Page, Pages
 
 __all__ = [

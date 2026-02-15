@@ -1,9 +1,9 @@
-"""data models for pdf extraction."""
-
 from __future__ import annotations
+
 import logging
 from functools import cached_property
 from typing import Any
+
 from pydantic import BaseModel, ConfigDict
 
 log = logging.getLogger(__name__)
@@ -65,9 +65,6 @@ class Page(list[Block]):
     def markdown(self) -> str:
         return "\n".join(b.markdown for b in self if b.markdown)
 
-    def __repr__(self) -> str:
-        return f"Page([{len(self)} blocks])"
-
 
 class Pages(list[Page]):
     def __init__(self, pages: list[Page] | None = None):
@@ -76,6 +73,3 @@ class Pages(list[Page]):
     @cached_property
     def markdown(self) -> str:
         return "\n---\n\n".join(p.markdown for p in self if p.markdown)
-
-    def __repr__(self) -> str:
-        return f"Pages([{len(self)} pages])"
