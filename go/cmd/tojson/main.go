@@ -82,23 +82,22 @@ func pdfToJson(pdfPath, outputPath string) error {
 	}
 	var results []pageResult
 	numWorkers := runtime.NumCPU()
-	threshold := max(
-		10,
-		numWorkers * 2
-		)
+	threshold := 10
+	if numWorkers*2 > threshold {
+		threshold = numWorkers * 2
+	}
 	if len(pageFiles) < threshold {
 		// sequential
-    results = make([]pageResult, len(pageFiles))
-    for i, pageFile := range pageFiles {
-        pageNum := extractPageNum(pageFile)
-        pageJSON, err := processPage(pageFile)
-        results[i] = pageResult{pageNum: pageNum, json: pageJSON, err: err}
-    }
-	} else
-	{
-	var wg sync.WaitGroup
-	pageChan := make(chan int, numWorkers)
-  results = make([]pageResult, len(pageFiles))
+		results = make([]pageResult, len(pageFiles))
+		for i, pageFile := range pageFiles {
+			pageNum := extractPageNum(pageFile)
+			pageJSON, err := processPage(pageFile)
+			results[i] = pageResult{pageNum: pageNum, json: pageJSON, err: err}
+		}
+	} else {
+		var wg sync.WaitGroup
+		pageChan := make(chan int, numWorkers)
+		results = make([]pageResult, len(pageFiles))
 
 	for i := 0; i < numWorkers; i++ {
 		wg.Add(1)
