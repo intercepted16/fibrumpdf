@@ -1,6 +1,7 @@
 """public api for pdf to json extraction."""
 
 from __future__ import annotations
+
 import json
 import logging
 import os
@@ -19,7 +20,7 @@ _CAPTURE = tempfile.NamedTemporaryFile(mode="w+", delete=False).name
 
 
 class ExtractionError(Exception):
-    """raised when pdf extraction fails."""
+    pass
 
 
 @contextmanager
@@ -82,7 +83,6 @@ def to_json(
     *,
     lib_path: Path | None = None,
 ) -> ConversionResult:
-    """extract pdf to json."""
     pdf = Path(pdf_path).resolve()
     if not pdf.exists():
         raise FileNotFoundError(f"pdf not found: {pdf}")

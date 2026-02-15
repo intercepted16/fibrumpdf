@@ -1,6 +1,7 @@
 """cffi bindings and library loading."""
 
 from __future__ import annotations
+
 import ctypes
 import logging
 import os
@@ -8,20 +9,22 @@ import sys
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
+
 from cffi import FFI
 
 log = logging.getLogger(__name__)
 ENV_VAR = "PYMUPDF4LLM_C_LIB"
 
 
-def _lib_names() -> tuple[str, ...]:
-    match sys.platform:
-        case "win32":
-            return ("tomd.dll",)
-        case "darwin":
-            return ("libtomd.dylib", "tomd.dylib")
-        case _:
-            return ("libtomd.so", "tomd.so")
+def _lib_names() -> str:
+    if sys.platform == "darwin":
+        return "libtomd.dylib"
+
+    elif sys.platform == "win32":
+        return "libtomd.dll"
+
+    else:
+        return "libtomd.so"
 
 
 def _search_paths() -> list[Path]:
@@ -51,11 +54,11 @@ def find_library() -> Path | None:
     for d in _search_paths():
         if not d.exists():
             continue
-        for name in _lib_names():
-            for f in d.rglob(name):
-                if f.is_file():
-                    log.debug("found library: %s", f)
-                    return f.resolve()
+        name = _lib_names()
+        for f in d.rglob(name):
+            if f.is_file():
+                log.debug("found library: %s", f)
+                return f.resolve()
     log.warning("libtomd not found")
     return None
 

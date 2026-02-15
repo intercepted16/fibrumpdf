@@ -5,7 +5,6 @@ package main
 */
 import "C"
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -23,10 +22,7 @@ import (
 	"github.com/pymupdf4llm-c/go/internal/logger"
 )
 
-var (
-	debugLog = os.Getenv("TOMD_DEBUG") != ""
-	Logger   = logger.GetLogger("tomd")
-)
+var Logger = logger.GetLogger("tomd")
 
 //export pdf_to_json
 func pdf_to_json(pdf_path *C.char, output_file *C.char) C.int {
@@ -38,15 +34,28 @@ func pdf_to_json(pdf_path *C.char, output_file *C.char) C.int {
 	return -1
 }
 
+func processPage(pageFile string) ([]byte, error) {
+	rawData, err := bridge.ReadRawPage(pageFile)
+	if err != nil {
+		return nil, err
+	}
+	page := extractor.ExtractPageFromRaw(rawData)
+	pageJSON, err := json.Marshal(page)
+	if err != nil {
+		return nil, err
+	}
+	return pageJSON, nil
+}
+
 func pdfToJson(pdfPath, outputPath string) error {
-	startTotal := time.Now() // total runtime timer
-	startRaw := time.Now()   // raw data timer
+	startTotal := time.Now()
+	startRaw := time.Now()
 
 	Logger.Info("beginning conversion...")
 	Logger.Debug("paths", "pdf", pdfPath, "output", outputPath)
 
 	tempRawDir, err := bridge.ExtractAllPagesRaw(pdfPath)
-	rawElapsed := time.Since(startRaw) // record raw extraction time
+	rawElapsed := time.Since(startRaw)
 	if err != nil {
 		Logger.Error("extraction error", "err", err)
 		return err
@@ -71,29 +80,36 @@ func pdfToJson(pdfPath, outputPath string) error {
 		json    []byte
 		err     error
 	}
-	results := make([]pageResult, len(pageFiles))
+	var results []pageResult
 	numWorkers := runtime.NumCPU()
+	threshold := max(
+		10,
+		numWorkers * 2
+		)
+	if len(pageFiles) < threshold {
+		// sequential
+    results = make([]pageResult, len(pageFiles))
+    for i, pageFile := range pageFiles {
+        pageNum := extractPageNum(pageFile)
+        pageJSON, err := processPage(pageFile)
+        results[i] = pageResult{pageNum: pageNum, json: pageJSON, err: err}
+    }
+	} else
+	{
 	var wg sync.WaitGroup
 	pageChan := make(chan int, numWorkers)
+  results = make([]pageResult, len(pageFiles))
 
 	for i := 0; i < numWorkers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for idx := range pageChan {
-				rawData, err := bridge.ReadRawPage(pageFiles[idx])
-				if err != nil {
-					results[idx] = pageResult{err: err}
-					continue
-				}
-				page := extractor.ExtractPageFromRaw(rawData)
-				pageJSON, err := json.Marshal(page)
-				if err != nil {
-					results[idx] = pageResult{err: err}
-					continue
-				}
-				results[idx] = pageResult{pageNum: page.Number, json: pageJSON}
-				Logger.Debug("processed page", "page", page.Number)
+				pageFile := pageFiles[idx]
+				pageNum := extractPageNum(pageFile)
+				pageJSON, err := processPage(pageFile)
+				results[idx] = pageResult{pageNum: pageNum, json: pageJSON, err: err}
+				Logger.Debug("processed page", "page", pageNum, "err", err)
 			}
 		}()
 	}
@@ -103,6 +119,8 @@ func pdfToJson(pdfPath, outputPath string) error {
 	}
 	close(pageChan)
 	wg.Wait()
+
+}
 
 	for _, res := range results {
 		if res.err != nil {
@@ -118,27 +136,14 @@ func pdfToJson(pdfPath, outputPath string) error {
 	}
 	defer outFile.Close()
 
-	writer := bufio.NewWriterSize(outFile, 256*1024)
-	defer writer.Flush()
-
-	if _, err := writer.WriteString("["); err != nil {
-		Logger.Error("write error", "err", err)
-		return err
-	}
+	pageList := make([]json.RawMessage, len(results))
 	for i, res := range results {
-		if i > 0 {
-			if _, err := writer.WriteString(","); err != nil {
-				Logger.Error("write error", "err", err)
-				return err
-			}
-		}
-		if _, err := writer.Write(res.json); err != nil {
-			Logger.Error("write error", "err", err)
-			return err
-		}
+		pageList[i] = json.RawMessage(res.json)
 		Logger.Debug("wrote page", "page", res.pageNum)
 	}
-	if _, err := writer.WriteString("]"); err != nil {
+
+	encoder := json.NewEncoder(outFile)
+	if err := encoder.Encode(pageList); err != nil {
 		Logger.Error("write error", "err", err)
 		return err
 	}
@@ -164,15 +169,9 @@ func extractPageNum(filename string) int {
 	return num
 }
 
-func init() {
-	if debugLog {
-		Logger.Debug("[tomd] library loaded")
-	}
-}
-
 func main() {
 	if len(os.Args) < 3 {
-		fmt.Println("Usage: ./program <input.pdf> [output_json]")
+		fmt.Println("Usage: ./tojson <input.pdf> [output_json]")
 		os.Exit(1)
 	}
 	pdfToJson(os.Args[1], os.Args[2])
