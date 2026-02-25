@@ -62,7 +62,7 @@ class build_py(build_py_base):
             "-buildmode=c-shared",
             "-o",
             str(output_path),
-            "./cmd/tomd",
+            "./cmd/tojson",
         ]
 
         env = os.environ.copy()
