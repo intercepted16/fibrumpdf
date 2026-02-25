@@ -26,11 +26,11 @@ const (
 func init() {
 	var fileHandler *customHandler
 
-	logPath := filepath.Join(tempDir, "pymupdf4llm_c.log")
+	logPath := filepath.Join(tempDir, "fibrum-pdf.log")
 	
 	fmt.Printf("writing all logs to: %s\n", logPath)
 
-	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
 
 		fmt.Fprintf(os.Stderr, "%s[logger warning]%s Could not open app.log for writing: %v. Logging to stdout only.\n", colorYellow, colorReset, err)
