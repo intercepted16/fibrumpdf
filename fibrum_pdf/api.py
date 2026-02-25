@@ -8,15 +8,25 @@ import os
 import sys
 import tempfile
 from contextlib import contextmanager
+from functools import cached_property
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Iterator
+from typing import TYPE_CHECKING, Any, Iterator, cast
 
-from ._cffi import find_library, load_library
-from .models import Page, Pages
+if TYPE_CHECKING:
+    from .models import Page, Pages
 
 log = logging.getLogger(__name__)
-_CAPTURE = tempfile.NamedTemporaryFile(mode="w+", delete=False).name
+_capture_file: str | None = None
+
+
+def _capture_path() -> str:
+    global _capture_file
+    if _capture_file is None:
+        fd, path = tempfile.mkstemp(prefix="fibrum_pdf_capture_", suffix=".log")
+        os.close(fd)
+        _capture_file = path
+    return _capture_file
 
 
 class ExtractionError(Exception):
@@ -26,12 +36,13 @@ class ExtractionError(Exception):
 @contextmanager
 def _redirect_c_output() -> Iterator[str]:
     saved = os.dup(1), os.dup(2)
-    fd = os.open(_CAPTURE, os.O_WRONLY | os.O_TRUNC)
+    capture = _capture_path()
+    fd = os.open(capture, os.O_WRONLY | os.O_TRUNC)
     try:
         os.dup2(fd, 1)
         os.dup2(fd, 2)
         os.close(fd)
-        yield _CAPTURE
+        yield capture
     finally:
         sys.stdout.flush()
         sys.stderr.flush()
@@ -43,6 +54,8 @@ def _redirect_c_output() -> Iterator[str]:
 
 @lru_cache(maxsize=1)
 def _lib(path: Path | None = None):
+    from ._cffi import find_library, load_library
+
     p = path or find_library()
     if not p or not p.exists():
         raise ExtractionError(
@@ -59,19 +72,51 @@ class ConversionResult:
         self.path = path
         log.debug("result at %s", path)
 
-    def _load(self) -> list[dict[str, Any]]:
+    def _load(self) -> list[Any]:
         with open(self.path, encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
+        if isinstance(data, list):
+            return cast(list[Any], data)
+        return []
 
-    def collect(self) -> Pages:
+    @cached_property
+    def markdown(self) -> str:
+        from ._block_converter import block_to_markdown
+
+        page_markdown: list[str] = []
+        for page in self._load():
+            if not isinstance(page, dict):
+                continue
+            page_dict = cast(dict[str, Any], page)
+            blocks = page_dict.get("data", [])
+            if not isinstance(blocks, list):
+                continue
+            blocks = cast(list[dict[str, Any]], blocks)
+            block_md: list[str] = []
+            for block in blocks:
+                rendered = block_to_markdown(block)
+                if rendered:
+                    block_md.append(rendered)
+            if block_md:
+                page_markdown.append("\n".join(block_md))
+        return "\n---\n\n".join(page_markdown)
+
+    def collect(self) -> "Pages":
+        from .models import Page, Pages
+
         pages = Pages([Page(p["data"]) for p in self._load()])
         log.info("collected %d pages", len(pages))
         return pages
 
-    def __iter__(self) -> Iterator[Page]:
-        for i, p in enumerate(self._load()):
-            log.debug("page %d", i + 1)
-            yield Page(p["data"])
+    def __iter__(self) -> Iterator["Page"]:
+        import ijson
+
+        from .models import Page
+
+        with open(self.path, encoding="utf-8") as f:
+            for i, p in enumerate(ijson.items(f, "item")):
+                log.debug("page %d", i + 1)
+                yield Page(p["data"])
 
     def __repr__(self) -> str:
         return f"ConversionResult({self.path})"
