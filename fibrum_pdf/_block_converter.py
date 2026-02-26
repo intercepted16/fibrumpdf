@@ -7,12 +7,9 @@ import re
 from typing import Any
 
 log = logging.getLogger(__name__)
-
-BULLETS = frozenset("•‣⁃⁌⁍∙▪▫●○◦■□▶▸◆◇♦➤\uf0b7\ufffd")
 FMT_MARKERS = ("**", "*", "`", "~~")
 PUNCT = " \n\t.,;:)]/\\-?!"
 STYLES = [
-    ("monospace", "`"),
     ("bold", "**"),
     ("italic", "*"),
     ("strikeout", "~~"),
@@ -20,31 +17,20 @@ STYLES = [
 ]
 
 
-def _normalize_bullets(text: str) -> str:
-    out: list[str] = []
-    i: int = 0
-    while i < len(text):
-        if text[i] in BULLETS:
-            out.append("- ")
-            i += 1
-            while i < len(text) and text[i] in " \t":
-                i += 1
-        else:
-            out.append(text[i])
-            i += 1
-    return "".join(out)
-
-
 def _style_span(span: dict[str, Any]) -> str:
     text = span.get("text", "")
     if not text:
         return ""
+    link = span.get("link") or ""
     if span.get("superscript"):
         s = text.strip()
-        return f"[{s}]" if s.isdigit() or re.match(r"^\d+[,\s\d]*$", s) else f"^{text}^"
+        text = f"[{s}]" if s.isdigit() or re.match(r"^\d+[,\s\d]*$", s) else f"^{text}^"
+        return f"[{text}]({link})" if link else text
     for key, fmt in STYLES:
         if span.get(key):
             text = f"{fmt}{text}{fmt}"
+    if link:
+        text = f"[{text}]({link})"
     return text
 
 
@@ -83,17 +69,20 @@ def _cell_text(cell: dict[str, Any]) -> str:
 def _table(rows: list[dict[str, Any]]) -> str:
     if not rows:
         return ""
-    hdr = [_cell_text(c) for c in rows[0].get("cells", [])]
+    matrix = [[_cell_text(c) for c in row.get("cells", [])] for row in rows]
+    hdr = matrix[0] if matrix else []
     lines: list[str] = []
     if any(hdr):
         lines += [
             "| " + " | ".join(hdr) + " |",
             "| " + " | ".join("---" for _ in hdr) + " |",
         ]
-    for row in rows[1:]:
-        lines.append(
-            "| " + " | ".join(_cell_text(c) for c in row.get("cells", [])) + " |"
-        )
+    for row in matrix[1:]:
+        if len(row) < len(hdr):
+            row = row + [""] * (len(hdr) - len(row))
+        elif len(row) > len(hdr):
+            row = row[: len(hdr)]
+        lines.append("| " + " | ".join(row) + " |")
     return "\n".join(lines) + "\n" if lines else ""
 
 
@@ -115,14 +104,21 @@ def _list(block: dict[str, Any], text: str) -> str:
 
 def block_to_markdown(block: dict[str, Any]) -> str:
     type = block.get("type", "")
-    text = block.get("text", "").strip() or _join_spans(block.get("spans", []))
-    if text:
-        text = _normalize_bullets(text)
+    text = _join_spans(block.get("spans", [])) or ""
 
     match type:
-        case "heading" if text:
-            return f"{'#' * block.get('level', 1)} {text}\n"
-        case "paragraph" | "text" if text:
+        case "heading":
+            level = int(block.get("level") or 1)
+            level = max(1, min(level, 6))
+            if level >= 4:
+                text = "".join(
+                    str(span.get("text", "")) for span in block.get("spans", [])
+                ).strip()
+                return f"**{text}**\n"
+            return f"{'#' * level} **{text}**\n"
+        case "paragraph":
+            return f"{text}\n"
+        case "code":
             return f"{text}\n"
         case "table":
             return _table(block.get("rows", []))
