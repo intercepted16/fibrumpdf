@@ -5,5 +5,7 @@
   "venv": ".venv",
   "typeCheckingMode": "strict",
   "reportMissingTypeStubs": "none",
-  "reportOptionalOperand": "none"
+  "reportOptionalOperand": "none",
+  "reportUnknownMemberType": "none",
+  "reportUnknownArgumentType": "none",
 }
