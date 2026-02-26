@@ -89,3 +89,11 @@ lib/
 dev/
 
 .uv-cache/
+
+uv.lock
+
+# lets me put my personal stuff that i'm testing and get it ignored
+dump/ 
+
+# swap stuff
+*.swx
