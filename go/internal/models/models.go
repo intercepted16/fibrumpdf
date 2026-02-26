@@ -124,19 +124,19 @@ type Block struct {
 	Type                          BlockType
 	BBox                          BBox
 	Length                        int
-	FontSize                      float32
-	Lines                         int
-	Level                         int
-	Spans                         []Span
-	Items                         []ListItem
-	RowCount, ColCount, CellCount int
-	Rows                          []TableRow
+	FontSize                      float32 // all blocks except tables
+	Lines                         int // for all blocks except tables
+	Level                         int // for headings
+	Spans                         []Span // this is for BlockText and BlockHeading
+	Items                         []ListItem // this is for BlockList
+	RowCount, ColCount, CellCount int // table
+	Rows                          []TableRow //  this is for BlockTable
 }
 
 func (b Block) MarshalJSON() ([]byte, error) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
+	enc.SetEscapeHTML(false) // for <br>
 	switch b.Type {
 	case BlockText, BlockCode:
 		enc.Encode(struct {
