@@ -82,45 +82,53 @@ func pdfToJson(pdfPath, outputPath string) error {
 	}
 	var results []pageResult
 	numWorkers := runtime.NumCPU()
-	threshold := max(
-		10,
-		numWorkers * 2
-		)
+	if numWorkers > len(pageFiles) {
+		numWorkers = len(pageFiles)
+	}
+	targetWorkers := (len(pageFiles) + 2) / 3
+	if len(pageFiles) >= 2 && targetWorkers < 2 {
+		targetWorkers = 2
+	}
+	if targetWorkers > 0 && targetWorkers < numWorkers {
+		numWorkers = targetWorkers
+	}
+	if len(pageFiles) < 64 && numWorkers > 8 {
+		numWorkers = 8
+	}
+	threshold := 2
 	if len(pageFiles) < threshold {
 		// sequential
-    results = make([]pageResult, len(pageFiles))
-    for i, pageFile := range pageFiles {
-        pageNum := extractPageNum(pageFile)
-        pageJSON, err := processPage(pageFile)
-        results[i] = pageResult{pageNum: pageNum, json: pageJSON, err: err}
-    }
-	} else
-	{
-	var wg sync.WaitGroup
-	pageChan := make(chan int, numWorkers)
-  results = make([]pageResult, len(pageFiles))
+		results = make([]pageResult, len(pageFiles))
+		for i, pageFile := range pageFiles {
+			pageNum := extractPageNum(pageFile)
+			pageJSON, err := processPage(pageFile)
+			results[i] = pageResult{pageNum: pageNum, json: pageJSON, err: err}
+		}
+	} else {
+		var wg sync.WaitGroup
+		pageChan := make(chan int, numWorkers)
+		results = make([]pageResult, len(pageFiles))
 
-	for i := 0; i < numWorkers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for idx := range pageChan {
-				pageFile := pageFiles[idx]
-				pageNum := extractPageNum(pageFile)
-				pageJSON, err := processPage(pageFile)
-				results[idx] = pageResult{pageNum: pageNum, json: pageJSON, err: err}
-				Logger.Debug("processed page", "page", pageNum, "err", err)
-			}
-		}()
+		for i := 0; i < numWorkers; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for idx := range pageChan {
+					pageFile := pageFiles[idx]
+					pageNum := extractPageNum(pageFile)
+					pageJSON, err := processPage(pageFile)
+					results[idx] = pageResult{pageNum: pageNum, json: pageJSON, err: err}
+					Logger.Debug("processed page", "page", pageNum, "err", err)
+				}
+			}()
+		}
+
+		for i := range pageFiles {
+			pageChan <- i
+		}
+		close(pageChan)
+		wg.Wait()
 	}
-
-	for i := range pageFiles {
-		pageChan <- i
-	}
-	close(pageChan)
-	wg.Wait()
-
-}
 
 	for _, res := range results {
 		if res.err != nil {
