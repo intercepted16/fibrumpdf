@@ -13,7 +13,7 @@ from typing import Any
 from cffi import FFI
 
 log = logging.getLogger(__name__)
-ENV_VAR = "PYMUPDF4LLM_C_LIB"
+ENV_VAR = "FIBRUMPDF_LIB"
 
 
 def _lib_names() -> str:
@@ -32,15 +32,16 @@ def _search_paths() -> list[Path]:
     proj, build = pkg.parent, pkg.parent / "build"
     paths = [
         pkg / "lib",
-        build / "lib" / "pymupdf4llm_c" / "lib",
+        build / "lib" / "fibrum_pdf" / "lib",
         proj / "lib",
+        proj / "lib" / "mupdf",
         build,
         build / "lib",
     ]
     if build.exists():
         for child in build.iterdir():
             if child.is_dir() and child.name.startswith("lib"):
-                paths += [child / "pymupdf4llm_c" / "lib", child]
+                paths += [child / "fibrum_pdf" / "lib", child]
     return paths
 
 
@@ -77,12 +78,30 @@ def get_ffi() -> FFI:
 def load_library(path: Path) -> Any:
     log.debug("loading %s", path)
     if sys.platform != "win32":
-        for mupdf in sorted(path.parent.glob("libmupdf.so.*"), reverse=True) or list(
-            path.parent.glob("libmupdf.so")
-        ):
-            log.debug("preloading mupdf: %s", mupdf)
-            ctypes.CDLL(str(mupdf), mode=ctypes.RTLD_GLOBAL)
-            break
+        # look for mupdf in the same directory as libtomd, or in the project lib dir
+        mupdf_search_paths = [
+            path.parent,
+            path.parent.parent.parent / "lib" / "mupdf",
+            Path(__file__).resolve().parent.parent / "lib" / "mupdf",
+        ]
+
+        found_mupdf = False
+        for d in mupdf_search_paths:
+            if not d.exists():
+                continue
+            for mupdf in sorted(d.glob("libmupdf.so.*"), reverse=True) or list(
+                d.glob("libmupdf.so")
+            ):
+                log.debug("preloading mupdf: %s", mupdf)
+                try:
+                    ctypes.CDLL(str(mupdf), mode=ctypes.RTLD_GLOBAL)
+                    found_mupdf = True
+                    break
+                except Exception as e:
+                    log.debug("failed to preload %s: %s", mupdf, e)
+            if found_mupdf:
+                break
+
     try:
         return get_ffi().dlopen(str(path))
     except OSError as e:
