@@ -27,7 +27,10 @@ func IsBullet[T rune | string](v T) bool {
 
 func HasVisibleContent(text string) bool {
 	for _, r := range text {
-		if r >= 33 && r <= 126 {
+		if unicode.IsSpace(r) {
+			continue
+		}
+		if unicode.IsLetter(r) || unicode.IsNumber(r) || unicode.IsPunct(r) || unicode.IsSymbol(r) {
 			return true
 		}
 	}
@@ -97,25 +100,6 @@ func IsAllCaps(text string) bool {
 	return hasAlpha
 }
 
-var headingKeywords = []string{"appendix", "chapter", "section", "heading", "article", "part"}
-
-func StartsWithHeadingKeyword(text string) bool {
-	trimmed := strings.TrimLeft(text, " ")
-	lower := strings.ToLower(trimmed)
-	for _, kw := range headingKeywords {
-		if !strings.HasPrefix(lower, kw) {
-			continue
-		}
-		if len(trimmed) == len(kw) {
-			return true
-		}
-		if next := rune(trimmed[len(kw)]); unicode.IsSpace(next) || next == ':' || next == '-' {
-			return true
-		}
-	}
-	return false
-}
-
 func StartsWithNumericHeading(text string) bool {
 	text = strings.TrimLeft(text, " ")
 	if text == "" {
@@ -148,7 +132,25 @@ func StartsWithBullet(text string) bool {
 	}
 	r := []rune(text)
 	if IsBullet(r[0]) {
-		return len(r) == 1 || unicode.IsSpace(r[1])
+		if len(r) == 1 {
+			return true
+		}
+		if !unicode.IsSpace(r[1]) {
+			return false
+		}
+		rest := strings.TrimSpace(string(r[1:]))
+		if rest == "" {
+			return false
+		}
+		if rr := []rune(rest); len(rr) > 0 {
+			if IsBullet(rr[0]) {
+				return false
+			}
+			if len(rr) == 1 && (rr[0] == '-' || rr[0] == '–' || rr[0] == '—') {
+				return false
+			}
+		}
+		return true
 	}
 	if isDigit(text[0]) || (len(text) >= 2 && isAlpha(text[0])) {
 		i := 0
