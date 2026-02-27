@@ -31,28 +31,57 @@ func CleanupPage(blocks []models.Block) {
 		block := &blocks[i]
 		switch block.Type {
 		case models.BlockText, models.BlockHeading, models.BlockFootnote, models.BlockOther, models.BlockCode:
-			cleanupSpans(block.Spans, DefaultCleanup)
+			block.Spans = cleanupSpans(block.Spans, DefaultCleanup)
 			for j := range block.Items {
-				cleanupSpans(block.Items[j].Spans, DefaultCleanup)
+				block.Items[j].Spans = cleanupSpans(block.Items[j].Spans, DefaultCleanup)
 			}
 		case models.BlockTable:
 			for j := range block.Rows {
 				for k := range block.Rows[j].Cells {
-					cleanupSpans(block.Rows[j].Cells[k].Spans, DefaultCleanup)
+					block.Rows[j].Cells[k].Spans = cleanupSpans(block.Rows[j].Cells[k].Spans, DefaultCleanup)
 				}
 			}
 		case models.BlockList:
 			for j := range block.Items {
-				cleanupSpans(block.Items[j].Spans, DefaultCleanup)
+				block.Items[j].Spans = cleanupSpans(block.Items[j].Spans, DefaultCleanup)
 			}
 		}
 	}
 }
 
-func cleanupSpans(spans []models.Span, opts CleanupOpts) {
-	for i := range spans {
-		spans[i].Text = cleanupSpanText(spans[i].Text, opts)
+func cleanupSpans(spans []models.Span, opts CleanupOpts) []models.Span {
+	if len(spans) == 0 {
+		return nil
 	}
+	spanOpts := opts
+	spanOpts.Trim = false
+	var cleaned []models.Span
+	for i := range spans {
+		spans[i].Text = cleanupSpanText(spans[i].Text, spanOpts)
+		if spans[i].Text != "" {
+			cleaned = append(cleaned, spans[i])
+		}
+	}
+	if len(cleaned) == 0 {
+		return nil
+	}
+	cleaned[0].Text = strings.TrimLeft(cleaned[0].Text, " \t\n\r\u00A0")
+	cleaned[len(cleaned)-1].Text = strings.TrimRight(cleaned[len(cleaned)-1].Text, " \t\n\r\u00A0")
+	out := cleaned[:0]
+	for _, s := range cleaned {
+		if s.Text == "" {
+			continue
+		}
+		if len(out) > 0 && out[len(out)-1].Style == s.Style && out[len(out)-1].URI == s.URI {
+			out[len(out)-1].Text += s.Text
+			continue
+		}
+		out = append(out, s)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func cleanupSpanText(input string, opts CleanupOpts) string {
