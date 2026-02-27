@@ -7,6 +7,8 @@ import re
 from typing import Any
 
 log = logging.getLogger(__name__)
+
+BULLETS = frozenset("•‣⁃⁌⁍∙▪▫●○◦■□▶▸◆◇♦➤\uf0b7\ufffd")
 FMT_MARKERS = ("**", "*", "`", "~~")
 PUNCT = " \n\t.,;:)]/\\-?!"
 STYLES = [
@@ -21,7 +23,9 @@ def _style_span(span: dict[str, Any]) -> str:
     text = span.get("text", "")
     if not text:
         return ""
-    link = span.get("link") or ""
+    link = span.get("link") or span.get("uri") or ""
+    if not isinstance(link, str):
+        link = ""
     if span.get("superscript"):
         s = text.strip()
         text = f"[{s}]" if s.isdigit() or re.match(r"^\d+[,\s\d]*$", s) else f"^{text}^"
@@ -104,21 +108,23 @@ def _list(block: dict[str, Any], text: str) -> str:
 
 def block_to_markdown(block: dict[str, Any]) -> str:
     type = block.get("type", "")
-    text = _join_spans(block.get("spans", [])) or ""
+    text = block.get("text", "").strip() or _join_spans(block.get("spans", []))
 
     match type:
-        case "heading":
+        case "heading" if text:
             level = int(block.get("level") or 1)
             level = max(1, min(level, 6))
             if level >= 4:
-                text = "".join(
-                    str(span.get("text", "")) for span in block.get("spans", [])
-                ).strip()
-                return f"**{text}**\n"
+                plain = (block.get("text") or "").strip()
+                if not plain:
+                    plain = "".join(
+                        str(span.get("text", "")) for span in block.get("spans", [])
+                    ).strip()
+                return f"**{plain or text}**\n"
             return f"{'#' * level} **{text}**\n"
-        case "paragraph":
+        case "paragraph" | "text" if text:
             return f"{text}\n"
-        case "code":
+        case "code" if text:
             return f"{text}\n"
         case "table":
             return _table(block.get("rows", []))
