@@ -1,3 +1,6 @@
+"""Models for output of FibrumPDF."""
+
+# ruff: noqa: D101, D102, D107
 from __future__ import annotations
 
 import logging
@@ -18,8 +21,7 @@ class Span(BaseModel):
     strikeout: bool = False
     superscript: bool = False
     subscript: bool = False
-    link: bool = False
-    uri: str | bool | None = None
+    link: str | bool = False
 
 
 class TableCell(BaseModel):
@@ -58,7 +60,7 @@ class Page(list[Block]):
         if isinstance(items, dict) and "data" in items:
             items = items["data"]
         for item in items or []:
-            self.append(Block(**item) if isinstance(item, dict) else item)
+            self.append(Block(**item) if isinstance(item, dict) else item)  # type: ignore
         log.debug("page: %d blocks", len(self))
 
     @cached_property
