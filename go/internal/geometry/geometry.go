@@ -67,3 +67,18 @@ func Clamp(x, lo, hi int) int {
 	}
 	return x
 }
+
+func MergeNearby(positions []float32, tol float32) []float32 {
+	if len(positions) < 2 {
+		return positions
+	}
+	var result []float32
+	result = append(result, positions[0])
+	for i := 1; i < len(positions); i++ {
+		if positions[i]-result[len(result)-1] > tol {
+			result = append(result, positions[i])
+		}
+	}
+	return result
+}
+
