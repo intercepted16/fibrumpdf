@@ -1,5 +1,5 @@
-#ifndef H
-#define H
+#ifndef BRIDGE_H
+#define BRIDGE_H
 #include <mupdf/fitz.h>
 #include <stdint.h>
 #define OK 0
@@ -64,4 +64,4 @@ typedef struct page_data
 } page_data;
 int read_page(const char* filepath, page_data* out);
 void free_page(page_data* data);
-#endif // H
+#endif // BRIDGE_H
