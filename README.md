@@ -1,15 +1,12 @@
 # FibrumPDF
 
-> This projects C extension has now been rewritten in Go. Performance, quality, and code quality have all improved. However, the Python-API remains the same.
-> It's also been renamed from PyMUPDF4LLM-C, because that was way too close to PyMuPDF4LLM.
+Extract 500+ pages a second on CPU.
 
-A fast PDF extractor for Python written in Go using MuPDF in the backend, inspired by `pymupdf4llm`. I took many of its heuristics and approaches. Initially, it was supposed to be a 1:1 port (just generating the same Markdown output), but I later pivoted.
+Gives you tables, text, and their formatting, plus lower level information like bounding boxes and font sizes.
 
-Most extractors give you raw text (fast but useless) or *full-on* OCR/ML. This is a middle ground.
+It outputs JSON for programmatic use, but still allows for Markdown.
 
-Outputs JSON for every block: text, type, bounding box, font metrics, tables. You get the raw data to process however you need.
-
-**Speed (averaged):** ~520 pages/second on CPU. 1 million pages in ~32 minutes.
+Written for Python, Go at the core, with a touch of C to interface with MuPDF.
 
 **Full performance breakdown** [here](#Performance-Breakdown)
 
@@ -21,8 +18,6 @@ Outputs JSON for every block: text, type, bounding box, font metrics, tables. Yo
 pip install fibrum-pdf
 ```
 
-*You can prefix this with whatever tools you use, like `uv`, `poetry`, etc.*
-
 > There are wheels for Python 3.9–3.14 (inclusive of minor versions) on macOS (ARM/x64) and all modern Linux distributions.
 
 **To build from source**, see [BUILD.md](BUILD.md). 
@@ -31,22 +26,20 @@ pip install fibrum-pdf
 
 ## What it's good at
 
-- millions of pages, fast
-- custom parsing logic; you own the rules
-- document archives, chunking strategies, any structured extraction
-- CPU only; no expensive inference
-- iterating on parsing logic without waiting hours
+- Speed.
+- Custom logic.
+- No GPU needed.
+- Iterating on parsing logic without waiting hours.
 
 ## What it's bad at
 
-- scanned or image-heavy PDFs (no OCR)
-- 99%+ accuracy on edge cases; trades precision for speed
-- figures or image extraction
+- Scanned PDFs and images. It doesn't extract images, nor parse them.
+- Complex layouts (think Forms, spreadsheet-style documents)
 
 ---
 # Usage
 
-### basic
+### Basic
 
 ```python
 from fibrum_pdf import to_json
@@ -57,7 +50,7 @@ print(f"Extracted to: {result.path}")
 
 > You can omit the `output` field; it defaults to `<file>.json`
 
-### collect all pages in memory
+### Collect all pages in memory
 
 ```python
 result = to_json("report.pdf", output="report.json")
@@ -88,7 +81,7 @@ for page in result:
         print(f"Block type: {block.type}")
 ```
 
-### convert to markdown
+### Markdown
 
 ```python
 result = to_json("document.pdf", output="document.json")
@@ -104,9 +97,7 @@ page_markdown = pages[0].markdown
 block_markdown = pages[0][0].markdown
 ```
 
-> `.markdown` is a property, not a function
-
-### command-line
+### Command-line
 
 ```bash
 python -m fibrum_pdf.main input.pdf [output_dir]
@@ -124,155 +115,33 @@ Each page is a JSON array of blocks. Every block has:
 - `length`: character count
 - `spans`: array of styled text spans with style flags (bold, italic, mono-space, etc.)
 
-> Note that a span represents a logical group of styling. in *most* blocks, it is likely that there is only one span.
-
-### Block types 
-
-> *Not real JSON; just to demonstrate output. (pseudo).*
-
-**text/paragraph/code blocks:**
-```json
-{
-  "type": "text",
-  "bbox": [72.03, 132.66, 542.7, 352.22],
-  "font_size": 12.0,
-  "length": 1145,
-  "lines": 14,
-  "spans": [
-    {
-      "text": "Block content here...",
-      "font_size": 12.0,
-      "bold": false,
-      "italic": false,
-      "monospace": false,
-      "strikeout": false,
-      "superscript": false,
-      "subscript": false,
-      "link": false,
-      "uri": false
-    }
-  ]
-}
-```
-
-**headings:**
-```json
-{
-  "type": "heading",
-  "bbox": [111.80, 187.53, 509.10, 217.56],
-  "font_size": 32.0,
-  "length": 25,
-  "level": 1,
-  "spans": [
-    {
-      "text": "Heading Text",
-      // all styling flags (as seen in the above)
-    }
-  ]
-}
-```
-
-**lists:**
-```json
-{
-  "type": "list",
-  "bbox": [40.44, 199.44, 107.01, 345.78],
-  "font_size": 11.04,
-  "length": 89,
-  "spans": [],
-  "items": [
-    {
-      "spans": [
-        {
-          "text": "First item",
-		  // all styling flags.
-        }
-      ],
-      "list_type": "bulleted",
-      "indent": 0,
-      "prefix": false
-    },
-    {
-      "spans": [
-        {
-          "text": "Second item",
-		  // all styling flags.
-        }
-      ],
-      "list_type": "numbered",
-      "indent": 0,
-      "prefix": "1."
-    }
-  ]
-}
-```
-
-**tables:**
-```json
-{
-  "type": "table",
-  "bbox": [72.0, 220.0, 523.5, 400.0],
-  "font_size": 12.0,
-  "length": 256,
-  "row_count": 3,
-  "col_count": 2,
-  "cell_count": 2,
-  "spans": [],
-  "rows": [
-    {
-      "bbox": [72.0, 220.0, 523.5, 250.0],
-      "cells": [
-        {
-          "bbox": [72.0, 220.0, 297.75, 250.0],
-          "spans": [
-            {
-              "text": "Header A",
-              // all styling flags.
-            }
-          ]
-        },
-        {
-          "bbox": [297.75, 220.0, 523.5, 250.0],
-          "spans": [
-            {
-              "text": "Header B",
-              // all styling flags.
-            }
-          ]
-        }
-      ]
-    }
-  ]
-}
-```
+> Note that a span represents a logical group of styling. You'll find that most blocks only have one span.
 
 ### Span fields
-
-all text spans contain:
 - `text`: span content
 - `font_size`: size in points
 - `bold`, `italic`, `monospace`, `strikeout`, `superscript`, `subscript`: boolean style flags
 - `link`: boolean indicating if span contains a hyperlink
 - `uri`: URI string if linked, otherwise false
 
+See [models.py](fibrum_pdf/models.py).
+
 ---
 
 # FAQ
 
-**why not marker/docling?**  
-if you have time and need maximum accuracy, use those. this is for when you're processing millions of pages or iterating on extraction logic quickly.
+**why not XXX?**
+There are tools that are much better in quality. These are typically reliant on some sort of ML or OCR, making them slow and GPU-dependent. There are also tools that are extremely fast, but only give you raw text; which isn't helpful. Hopefully, this is fast and good enough.
 
-**how do i use bounding boxes for semantic chunking?**  
-large y-gaps indicate topic breaks. font size changes show sections. indentation shows hierarchy. you write the logic using the metadata.
+**Will this handle my XXX PDF?**  
+It won't handle scanned documents, images or weird layouts and elements (think Forms in PDFs and spreadsheet-like documents).
 
-**will this handle my complex PDF?**  
-optimized for well-formed digital PDFs. scanned documents, complex table structures, and image-heavy layouts won't extract as well as ML tools.
+**Commercial use?**  
+This project uses MuPDF, which is under the AGPL-v3 license, or optionally a paid license from Artifex Software.
 
-**commercial use?**  
-only under AGPL-v3 or with a license from Artifex (MuPDF's creators). see [LICENSE](LICENSE)
+**Motivations?**
+I got bored waiting for my documents to get chunked again.
 
-**why did you build this?**
-Dumb reason. I was building a RAG project with my dad (I'm 15). He did not care about speed at all. But I just got bored of waiting for chunking the PDFs every time I made a minor change. I couldn't find anything with even 50% of the quality that would be faster. And anyway, my chunks were trash. So it was either: raw text, or ML, and I didn't want either of them.
 
 ---
 # Performance Breakdown
@@ -297,23 +166,9 @@ On the NIST document (150 pages): Go spent 78ms out of 363ms total (21%), MuPDF 
 - **~520 pages/second**
 
 ---
-# Licensing and Links
 
-## licensing
+# Licensing
+This project uses MuPDF, which is under the AGPL-v3 license, or optionally a paid license from Artifex Software.
 
-TL;DR: use it all you want in OSS software. if you buy license for MUPDF from Artifex, you are excluded from all AGPL requirements.
+See [LICENSE](LICENSE) for the detail.
 
-- derived work of `mupdf`.
-- inspired by `pymupdf4llm`; i have used it as a reference
-
-AGPL v3. commercial use requires license from Artifex.
-
-
-modifications and enhancements specific to this library are 2026 Adit Bajaj.
-
-see [LICENSE](LICENSE) for the legal stuff.
-
-## links
-
-- repo: [github.com/intercepted16/fibrum-pdf](https://github.com/intercepted16/fibrumpdf)
-- pypi: [fibrum-pdf](https://pypi.org/project/fibrum-pdf)
