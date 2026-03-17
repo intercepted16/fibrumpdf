@@ -1,6 +1,6 @@
 module github.com/pymupdf4llm-c/go
 
-go 1.21
+go 1.23
 
 require github.com/tidwall/rtree v1.10.0
 
