@@ -1,5 +1,5 @@
-#ifndef BRIDGE_H
-#define BRIDGE_H
+#ifndef RAW_H
+#define RAW_H
 #include <mupdf/fitz.h>
 #include <stdint.h>
 #define OK 0
@@ -13,12 +13,6 @@ typedef struct edge
     double x0, y0, x1, y1;
     char orientation; // 'h' or 'v'
 } edge;
-typedef struct edge_array
-{
-    edge* items;
-    int count;
-    int capacity;
-} edge_array;
 char* extract_all_pages(const char* pdf_path);
 typedef struct fchar
 {
@@ -64,4 +58,4 @@ typedef struct page_data
 } page_data;
 int read_page(const char* filepath, page_data* out);
 void free_page(page_data* data);
-#endif // BRIDGE_H
+#endif // RAW_H

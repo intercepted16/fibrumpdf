@@ -1,4 +1,4 @@
-package extractor
+package extractor_test
 
 import (
 	"os"
@@ -6,29 +6,21 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pymupdf4llm-c/go/internal/bridge"
+	"github.com/pymupdf4llm-c/go/internal/extractor"
 	"github.com/pymupdf4llm-c/go/internal/models"
+	"github.com/pymupdf4llm-c/go/internal/raw"
 	"github.com/pymupdf4llm-c/go/internal/testutil"
 )
 
 func extractTestPDF(t *testing.T, pdfName string) []models.Page {
 	t.Helper()
-	if testutil.TestDataDir == "" {
-		t.Fatal("could not find project root")
-	}
-	pdfPath := filepath.Join(testutil.TestDataDir, pdfName)
-	if _, err := os.Stat(pdfPath); err != nil {
-		t.Fatalf("test pdf not found: %s", pdfPath)
-	}
 
-	tempDir, err := bridge.ExtractAllPagesRaw(pdfPath)
+	tempDir, err := testutil.ExtractRawFromTestData(pdfName)
 	if err != nil {
 		t.Fatalf("extraction failed: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := os.RemoveAll(tempDir); err != nil {
-			t.Logf("warning: failed to cleanup temp dir %s: %v", tempDir, err)
-		}
+		os.RemoveAll(tempDir)
 	})
 
 	files, err := os.ReadDir(tempDir)
@@ -41,12 +33,12 @@ func extractTestPDF(t *testing.T, pdfName string) []models.Page {
 		if !strings.HasSuffix(f.Name(), ".raw") {
 			continue
 		}
-		raw, err := bridge.ReadRawPage(filepath.Join(tempDir, f.Name()))
+		raw, err := raw.ReadRawPage(filepath.Join(tempDir, f.Name()))
 		if err != nil {
 			t.Logf("warning: failed to read page %s: %v", f.Name(), err)
 			continue
 		}
-		pages = append(pages, ExtractPageFromRaw(raw))
+		pages = append(pages, extractor.ExtractPageFromRaw(raw))
 	}
 	return pages
 }
@@ -70,7 +62,7 @@ func TestExtractPageProducesBlocks(t *testing.T) {
 }
 
 func TestExtractHeadings(t *testing.T) {
-	pages := extractTestPDF(t, "sample_with_headings.pdf")
+	pages := extractTestPDF(t, "sample.pdf")
 
 	var headings []models.Block
 	for _, p := range pages {
@@ -97,7 +89,7 @@ func TestExtractHeadings(t *testing.T) {
 }
 
 func TestExtractLists(t *testing.T) {
-	pages := extractTestPDF(t, "sample_with_lists.pdf")
+	pages := extractTestPDF(t, "sample.pdf")
 
 	var lists []models.Block
 	for _, p := range pages {
@@ -126,7 +118,7 @@ func TestExtractLists(t *testing.T) {
 }
 
 func TestExtractTables(t *testing.T) {
-	pages := extractTestPDF(t, "sample_with_table.pdf")
+	pages := extractTestPDF(t, "sample.pdf")
 
 	var tables []models.Block
 	for _, p := range pages {
@@ -156,7 +148,7 @@ func TestExtractTables(t *testing.T) {
 }
 
 func TestExtractFormatting(t *testing.T) {
-	pages := extractTestPDF(t, "sample_with_formatting.pdf")
+	pages := extractTestPDF(t, "sample.pdf")
 
 	var boldFound, italicFound bool
 	for _, p := range pages {

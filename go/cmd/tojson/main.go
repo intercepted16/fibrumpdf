@@ -5,6 +5,7 @@ package main
 */
 import "C"
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -17,12 +18,12 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/pymupdf4llm-c/go/internal/bridge"
 	"github.com/pymupdf4llm-c/go/internal/extractor"
 	"github.com/pymupdf4llm-c/go/internal/logger"
+	rawdata "github.com/pymupdf4llm-c/go/internal/raw"
 )
 
-var Logger = logger.GetLogger("tomd")
+var Logger = logger.GetLogger("tojson")
 
 //export pdf_to_json
 func pdf_to_json(pdf_path *C.char, output_file *C.char) C.int {
@@ -35,7 +36,7 @@ func pdf_to_json(pdf_path *C.char, output_file *C.char) C.int {
 }
 
 func processPage(pageFile string) ([]byte, error) {
-	rawData, err := bridge.ReadRawPage(pageFile)
+	rawData, err := rawdata.ReadRawPage(pageFile)
 	if err != nil {
 		return nil, err
 	}
@@ -54,7 +55,7 @@ func pdfToJson(pdfPath, outputPath string) error {
 	Logger.Info("beginning conversion...")
 	Logger.Debug("paths", "pdf", pdfPath, "output", outputPath)
 
-	tempRawDir, err := bridge.ExtractAllPagesRaw(pdfPath)
+	tempRawDir, err := rawdata.ExtractAllPagesRaw(pdfPath)
 	rawElapsed := time.Since(startRaw)
 	if err != nil {
 		Logger.Error("extraction error", "err", err)
@@ -76,11 +77,11 @@ func pdfToJson(pdfPath, outputPath string) error {
 	sort.Slice(pageFiles, func(i, j int) bool { return extractPageNum(pageFiles[i]) < extractPageNum(pageFiles[j]) })
 
 	type pageResult struct {
+		idx     int
 		pageNum int
 		json    []byte
 		err     error
 	}
-	var results []pageResult
 	numWorkers := runtime.NumCPU()
 	if numWorkers > len(pageFiles) {
 		numWorkers = len(pageFiles)
@@ -96,18 +97,51 @@ func pdfToJson(pdfPath, outputPath string) error {
 		numWorkers = 8
 	}
 	threshold := 2
+	outFile, err := os.Create(outputPath)
+	if err != nil {
+		Logger.Error("output file error", "err", err)
+		return err
+	}
+	defer outFile.Close()
+	writer := bufio.NewWriter(outFile)
+	defer writer.Flush()
+	if _, err := writer.WriteString("["); err != nil {
+		Logger.Error("write error", "err", err)
+		return err
+	}
+
+	wroteAny := false
+	writePage := func(pageJSON []byte, pageNum int) error {
+		if wroteAny {
+			if _, err := writer.WriteString(","); err != nil {
+				return err
+			}
+		}
+		if _, err := writer.Write(pageJSON); err != nil {
+			return err
+		}
+		wroteAny = true
+		Logger.Debug("wrote page", "page", pageNum)
+		return nil
+	}
+
 	if len(pageFiles) < threshold {
-		// sequential
-		results = make([]pageResult, len(pageFiles))
-		for i, pageFile := range pageFiles {
+		for _, pageFile := range pageFiles {
 			pageNum := extractPageNum(pageFile)
 			pageJSON, err := processPage(pageFile)
-			results[i] = pageResult{pageNum: pageNum, json: pageJSON, err: err}
+			if err != nil {
+				Logger.Error("processing error", "err", err)
+				return err
+			}
+			if err := writePage(pageJSON, pageNum); err != nil {
+				Logger.Error("write error", "err", err)
+				return err
+			}
 		}
 	} else {
 		var wg sync.WaitGroup
 		pageChan := make(chan int, numWorkers)
-		results = make([]pageResult, len(pageFiles))
+		resultChan := make(chan pageResult, numWorkers)
 
 		for i := 0; i < numWorkers; i++ {
 			wg.Add(1)
@@ -117,41 +151,54 @@ func pdfToJson(pdfPath, outputPath string) error {
 					pageFile := pageFiles[idx]
 					pageNum := extractPageNum(pageFile)
 					pageJSON, err := processPage(pageFile)
-					results[idx] = pageResult{pageNum: pageNum, json: pageJSON, err: err}
+					resultChan <- pageResult{idx: idx, pageNum: pageNum, json: pageJSON, err: err}
 					Logger.Debug("processed page", "page", pageNum, "err", err)
 				}
 			}()
 		}
 
-		for i := range pageFiles {
-			pageChan <- i
+		go func() {
+			wg.Wait()
+			close(resultChan)
+		}()
+
+		go func() {
+			for i := range pageFiles {
+				pageChan <- i
+			}
+			close(pageChan)
+		}()
+
+		pending := make(map[int]pageResult, numWorkers)
+		nextIdx := 0
+		var firstErr error
+		for res := range resultChan {
+			if res.err != nil && firstErr == nil {
+				firstErr = res.err
+				Logger.Error("processing error", "err", res.err)
+			}
+			pending[res.idx] = res
+			for {
+				nextRes, ok := pending[nextIdx]
+				if !ok {
+					break
+				}
+				if firstErr == nil {
+					if err := writePage(nextRes.json, nextRes.pageNum); err != nil {
+						firstErr = err
+						Logger.Error("write error", "err", err)
+					}
+				}
+				delete(pending, nextIdx)
+				nextIdx++
+			}
 		}
-		close(pageChan)
-		wg.Wait()
-	}
-
-	for _, res := range results {
-		if res.err != nil {
-			Logger.Error("processing error", "err", res.err)
-			return res.err
+		if firstErr != nil {
+			return firstErr
 		}
 	}
 
-	outFile, err := os.Create(outputPath)
-	if err != nil {
-		Logger.Error("output file error", "err", err)
-		return err
-	}
-	defer outFile.Close()
-
-	pageList := make([]json.RawMessage, len(results))
-	for i, res := range results {
-		pageList[i] = json.RawMessage(res.json)
-		Logger.Debug("wrote page", "page", res.pageNum)
-	}
-
-	encoder := json.NewEncoder(outFile)
-	if err := encoder.Encode(pageList); err != nil {
+	if _, err := writer.WriteString("]\n"); err != nil {
 		Logger.Error("write error", "err", err)
 		return err
 	}
@@ -182,5 +229,9 @@ func main() {
 		fmt.Println("Usage: ./tojson <input.pdf> [output_json]")
 		os.Exit(1)
 	}
-	pdfToJson(os.Args[1], os.Args[2])
+	err := pdfToJson(os.Args[1], os.Args[2])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
 }

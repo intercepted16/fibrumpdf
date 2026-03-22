@@ -48,6 +48,8 @@ const (
 	BlockOther    BlockType = "other"
 )
 
+func (t BlockType) String() string { return string(t) }
+
 type TextStyle struct{ Bold, Italic, Monospace bool }
 
 type Span struct {
@@ -86,10 +88,19 @@ func (s Span) MarshalJSON() ([]byte, error) {
 
 type ListItem struct {
 	Spans    []Span
-	ListType string
+	ListType ListType
 	Indent   int
 	Prefix   string
 }
+
+type ListType string
+
+const (
+	ListTypeBulleted ListType = "bulleted"
+	ListTypeNumbered ListType = "numbered"
+)
+
+func (t ListType) String() string { return string(t) }
 
 func (li ListItem) MarshalJSON() ([]byte, error) {
 	lt, ind, pre := any(false), any(false), any(false)
@@ -124,12 +135,12 @@ type Block struct {
 	Type                          BlockType
 	BBox                          BBox
 	Length                        int
-	FontSize                      float32 // all blocks except tables
-	Lines                         int // for all blocks except tables
-	Level                         int // for headings
-	Spans                         []Span // this is for BlockText and BlockHeading
+	FontSize                      float32    // all blocks except tables
+	Lines                         int        // for all blocks except tables
+	Level                         int        // for headings
+	Spans                         []Span     // this is for BlockText and BlockHeading
 	Items                         []ListItem // this is for BlockList
-	RowCount, ColCount, CellCount int // table
+	RowCount, ColCount, CellCount int        // table
 	Rows                          []TableRow //  this is for BlockTable
 }
 
@@ -139,34 +150,40 @@ func (b Block) MarshalJSON() ([]byte, error) {
 	enc.SetEscapeHTML(false) // for <br>
 	switch b.Type {
 	case BlockText, BlockCode:
-		enc.Encode(struct {
+		if err := enc.Encode(struct {
 			Type     BlockType `json:"type"`
 			BBox     BBox      `json:"bbox"`
 			Length   int       `json:"length"`
 			Spans    []Span    `json:"spans,omitempty"`
 			FontSize float32   `json:"font_size"`
 			Lines    int       `json:"lines"`
-		}{b.Type, b.BBox, b.Length, b.Spans, b.FontSize, b.Lines})
+		}{b.Type, b.BBox, b.Length, b.Spans, b.FontSize, b.Lines}); err != nil {
+			return nil, err
+		}
 	case BlockHeading:
-		enc.Encode(struct {
+		if err := enc.Encode(struct {
 			Type     BlockType `json:"type"`
 			BBox     BBox      `json:"bbox"`
 			Length   int       `json:"length"`
 			Spans    []Span    `json:"spans,omitempty"`
 			FontSize float32   `json:"font_size"`
 			Level    int       `json:"level,omitempty"`
-		}{b.Type, b.BBox, b.Length, b.Spans, b.FontSize, b.Level})
+		}{b.Type, b.BBox, b.Length, b.Spans, b.FontSize, b.Level}); err != nil {
+			return nil, err
+		}
 	case BlockList:
-		enc.Encode(struct {
+		if err := enc.Encode(struct {
 			Type     BlockType  `json:"type"`
 			BBox     BBox       `json:"bbox"`
 			Length   int        `json:"length"`
 			Spans    []Span     `json:"spans,omitempty"`
 			FontSize float32    `json:"font_size"`
 			Items    []ListItem `json:"items,omitempty"`
-		}{b.Type, b.BBox, b.Length, b.Spans, b.FontSize, b.Items})
+		}{b.Type, b.BBox, b.Length, b.Spans, b.FontSize, b.Items}); err != nil {
+			return nil, err
+		}
 	case BlockTable:
-		enc.Encode(struct {
+		if err := enc.Encode(struct {
 			Type      BlockType  `json:"type"`
 			BBox      BBox       `json:"bbox"`
 			Length    int        `json:"length"`
@@ -176,15 +193,19 @@ func (b Block) MarshalJSON() ([]byte, error) {
 			ColCount  int        `json:"col_count,omitempty"`
 			CellCount int        `json:"cell_count,omitempty"`
 			Rows      []TableRow `json:"rows,omitempty"`
-		}{b.Type, b.BBox, b.Length, b.Spans, b.FontSize, b.RowCount, b.ColCount, b.CellCount, b.Rows})
+		}{b.Type, b.BBox, b.Length, b.Spans, b.FontSize, b.RowCount, b.ColCount, b.CellCount, b.Rows}); err != nil {
+			return nil, err
+		}
 	default:
-		enc.Encode(struct {
+		if err := enc.Encode(struct {
 			Type     BlockType `json:"type"`
 			BBox     BBox      `json:"bbox"`
 			Length   int       `json:"length"`
 			Spans    []Span    `json:"spans,omitempty"`
 			FontSize float32   `json:"font_size"`
-		}{b.Type, b.BBox, b.Length, b.Spans, b.FontSize})
+		}{b.Type, b.BBox, b.Length, b.Spans, b.FontSize}); err != nil {
+			return nil, err
+		}
 	}
 	return bytes.TrimSpace(buf.Bytes()), nil
 }
