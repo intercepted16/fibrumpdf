@@ -123,19 +123,40 @@ static void cleanup_shared_font_cache(void) {
 
 /* Lookup or add font to shared cache. Returns flags for the font. */
 static unsigned char get_font_flags(fz_context* ctx, fz_font* f) {
-    if (!f || !global_font_cache)
+    if (!f)
         return 0;
 
-    pthread_mutex_lock(&global_font_cache->lock);
+    if (global_font_cache) {
+        pthread_mutex_lock(&global_font_cache->lock);
 
-    for (int i = 0; i < global_font_cache->len; i++) {
-        if (global_font_cache->entries[i].font == f) {
-            unsigned char flags = global_font_cache->entries[i].flags;
-            pthread_mutex_unlock(&global_font_cache->lock);
-            return flags;
+        for (int i = 0; i < global_font_cache->len; i++) {
+            if (global_font_cache->entries[i].font == f) {
+                unsigned char flags = global_font_cache->entries[i].flags;
+                pthread_mutex_unlock(&global_font_cache->lock);
+                return flags;
+            }
         }
+
+        unsigned char flags = 0;
+        fz_font_flags_t* ff = fz_font_flags(f);
+        if (fz_font_is_bold(ctx, f)) flags |= 1;
+        if (fz_font_is_italic(ctx, f)) flags |= 2;
+        if (fz_font_is_monospaced(ctx, f)) flags |= 4;
+        if (ff && ff->fake_bold) flags |= 1;
+        if (ff && ff->fake_italic) flags |= 2;
+        flags |= infer_style_from_font_name(fz_font_name(ctx, f));
+
+        if (global_font_cache->len < FONT_CACHE_SIZE) {
+            global_font_cache->entries[global_font_cache->len].font = f;
+            global_font_cache->entries[global_font_cache->len].flags = flags;
+            global_font_cache->len++;
+        }
+
+        pthread_mutex_unlock(&global_font_cache->lock);
+        return flags;
     }
 
+    /* Fallback: no cache, compute directly */
     unsigned char flags = 0;
     fz_font_flags_t* ff = fz_font_flags(f);
     if (fz_font_is_bold(ctx, f)) flags |= 1;
@@ -144,14 +165,6 @@ static unsigned char get_font_flags(fz_context* ctx, fz_font* f) {
     if (ff && ff->fake_bold) flags |= 1;
     if (ff && ff->fake_italic) flags |= 2;
     flags |= infer_style_from_font_name(fz_font_name(ctx, f));
-
-    if (global_font_cache->len < FONT_CACHE_SIZE) {
-        global_font_cache->entries[global_font_cache->len].font = f;
-        global_font_cache->entries[global_font_cache->len].flags = flags;
-        global_font_cache->len++;
-    }
-
-    pthread_mutex_unlock(&global_font_cache->lock);
     return flags;
 }
 
