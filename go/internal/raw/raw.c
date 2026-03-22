@@ -663,13 +663,15 @@ char* extract_all_pages(const char* pdf_path)
     mkdir(temp_dir, 0755);
 
     fz_context* ctx = fz_new_context(NULL, NULL, FZ_STORE_SIZE);
-    fz_set_warning_callback(ctx, mupdf_warning_callback, NULL);
-    fz_set_error_callback(ctx, mupdf_error_callback, NULL);
 
     if (!ctx) {
-        cleanup_shared_font_cache();        free(temp_dir);
+        cleanup_shared_font_cache();
+        free(temp_dir);
         return NULL;
     }
+
+    fz_set_warning_callback(ctx, mupdf_warning_callback, NULL);
+    fz_set_error_callback(ctx, mupdf_error_callback, NULL);
 
     fz_document* doc = NULL;
     int page_count = 0;
