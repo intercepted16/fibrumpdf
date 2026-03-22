@@ -2,7 +2,7 @@
 [project]
 name = "fibrum-pdf"
 version = "1.0.2"
-description = "A fast PDF extractor; a 500 pages/s alternative to Marker, Docling, PyMUPDF4LLM & others."
+description = "A fast PDF extractor."
 authors = [{ name = "Adit Bajaj" }]
 readme = "README.md"
 requires-python = ">=3.10"

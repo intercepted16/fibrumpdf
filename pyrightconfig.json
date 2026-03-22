@@ -1,5 +1,5 @@
 {
-  "include": ["src"],
+  "include": ["fibrum_pdf", "benchmark"],
   "exclude": ["**/__pycache__", ".venv"],
   "venvPath": ".",
   "venv": ".venv",
@@ -7,5 +7,5 @@
   "reportMissingTypeStubs": "none",
   "reportOptionalOperand": "none",
   "reportUnknownMemberType": "none",
-  "reportUnknownArgumentType": "none",
+  "reportUnknownArgumentType": "none"
 }

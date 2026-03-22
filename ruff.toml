@@ -1,8 +1,7 @@
 line-length = 88
 [lint]
-select = ["E", "F", "W", "C", "D", "N", "T", "B"]
+select = ["F", "W", "C", "N", "T", "B"]
 mccabe.max-complexity = 8
-ignore = [D103, D101, D102]
 pydocstyle.convention = "google"
 
 
