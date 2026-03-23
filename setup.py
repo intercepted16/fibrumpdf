@@ -1,5 +1,3 @@
-"""setup.py: Build script for pymupdf4llm_c package."""
-
 from __future__ import annotations
 
 import os
@@ -12,11 +10,7 @@ from setuptools import setup, Distribution
 from setuptools.command.build_py import build_py as build_py_base
 from setuptools.command.install import install as install_base
 
-try:
-    from wheel.bdist_wheel import bdist_wheel as bdist_wheel_base
-except ImportError:
-    # Fallback for newer setuptools versions
-    from setuptools.command.bdist_wheel import bdist_wheel as bdist_wheel_base
+from setuptools.command.bdist_wheel import bdist_wheel as bdist_wheel_base
 
 ROOT = Path(__file__).parent.resolve()
 PACKAGENAME = "fibrum_pdf"
@@ -97,15 +91,14 @@ class bdist_wheel(bdist_wheel_base):
 
     def finalize_options(self) -> None:
         super().finalize_options()
-        # Mark the wheel as platform-specific (not pure Python)
+
         self.root_is_pure = False
 
     def get_tag(self):
-        # Force platform-specific tags
+
         python, abi, plat = super().get_tag()
-        # Ensure we don't get 'none-any' tags
+
         if abi == "none" and plat == "any":
-            # Get the actual platform tags
             from wheel.bdist_wheel import get_platform
 
             plat = get_platform(self.bdist_dir)
@@ -119,7 +112,7 @@ class install(install_base):
 
     def finalize_options(self) -> None:
         super().finalize_options()
-        # Force installation to platlib (platform-specific) instead of purelib
+
         if self.install_lib is None:
             self.install_lib = self.install_platlib
 
