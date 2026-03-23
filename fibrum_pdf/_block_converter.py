@@ -107,10 +107,10 @@ def _list(block: dict[str, Any], text: str) -> str:
 
 
 def block_to_markdown(block: dict[str, Any]) -> str:
-    type = block.get("type", "")
+    typ = block.get("type", "")
     text = block.get("text", "").strip() or _join_spans(block.get("spans", []))
 
-    match type:
+    match typ:
         case "heading" if text:
             level = int(block.get("level") or 1)
             level = max(1, min(level, 6))
@@ -133,5 +133,5 @@ def block_to_markdown(block: dict[str, Any]) -> str:
         case "figure":
             return f"![Figure]({block.get('text', 'figure')})\n"
         case _:
-            log.debug("skipping block type=%s", type)
+            log.debug("skipping block type=%s", typ)
             return ""
