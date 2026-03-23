@@ -1,3 +1,6 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "fibrum-pdf"
@@ -5,13 +8,11 @@ version = "1.0.2"
 description = "A fast PDF extractor."
 authors = [{ name = "Adit Bajaj" }]
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.9"
 license = "AGPL-3.0"
 dependencies = [
     "cffi",
-    "marko",
-    "pydantic",
-    "typer",
+    "pydantic"
 ]
 
 [project.optional-dependencies]
@@ -31,9 +32,12 @@ fibrum-pdf = "fibrum_pdf.main:main"
 [tool.cibuildwheel]
 skip = ["*-musllinux*", "*i686*", "*aarch64*"]
 build = [
-    "cp3{10,11,12,13,14}-manylinux_x86_64",
-    "cp3{10,11,12,13,14}-macosx_arm64"
+    "cp3{9,10,11,12,13,14}-manylinux_x86_64",
+    "cp3{9,10,11,12,13,14}-macosx_arm64"
 ]
+
+
+
 
 [tool.cibuildwheel.linux]
 environment = { LD_LIBRARY_PATH = "$PWD/lib/mupdf:$LD_LIBRARY_PATH", PATH = "/usr/local/go/bin:$PATH" }
@@ -62,15 +66,3 @@ before-all = [
 repair-wheel-command = """
 DYLD_LIBRARY_PATH=$PWD/lib/mupdf delocate-wheel --require-archs {delocate_archs} -w {dest_dir} -v {wheel}
 """
-
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
-
-[tool.hatch.version]
-path = "fibrum_pdf/__init__.py"
-
-[tool.hatch.build.targets.wheel]
-packages = ["fibrum_pdf"]
-only-packages = true
