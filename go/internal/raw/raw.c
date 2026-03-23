@@ -842,11 +842,11 @@ int read_page(const char* filepath, page_data* out)
     out->edge_count = edge_count;
     out->link_count = link_count;
 
-    out->blocks = malloc(out->block_count * sizeof(fblock));
-    out->lines = malloc(out->line_count * sizeof(fline));
-    out->chars = malloc(out->char_count * sizeof(fchar));
-    out->edges = malloc(out->edge_count * sizeof(edge));
-    out->links = malloc(out->link_count * sizeof(flink));
+    out->blocks = malloc(out->block_count ? out->block_count * sizeof(fblock) : 1);
+    out->lines  = malloc(out->line_count ? out->line_count * sizeof(fline) : 1);
+    out->chars  = malloc(out->char_count ? out->char_count * sizeof(fchar) : 1);
+    out->edges  = malloc(out->edge_count ? out->edge_count * sizeof(edge) : 1);
+    out->links  = malloc(out->link_count ? out->link_count * sizeof(flink) : 1);
 
     if (!out->blocks || !out->lines || !out->chars || !out->edges || !out->links)
     {
