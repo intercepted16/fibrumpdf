@@ -6,6 +6,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/pymupdf4llm-c/go/internal/column"
 	"github.com/pymupdf4llm-c/go/internal/models"
 	"github.com/pymupdf4llm-c/go/internal/textutil"
 )
@@ -24,6 +25,9 @@ type orderedBlock struct {
 }
 
 func (s postProcessStage) Run(ctx parseOutput, blocks []layoutBlock, tables []models.Block) []models.Block {
+	// Assign column indices to tables using the same column detection as layout blocks
+	tableColIndices := s.assignTableColumns(tables, ctx.bodyFontSize)
+
 	ordered := make([]orderedBlock, 0, len(blocks)+len(tables))
 	for _, b := range blocks {
 		pb := postBlock{layoutBlock: b}
@@ -45,8 +49,12 @@ func (s postProcessStage) Run(ctx parseOutput, blocks []layoutBlock, tables []mo
 		}
 		ordered = append(ordered, orderedBlock{bbox: pb.bbox, colIdx: pb.colIdx, block: pb.toBlock()})
 	}
-	for _, tbl := range tables {
-		ordered = append(ordered, orderedBlock{bbox: tbl.BBox, colIdx: 0, block: tbl})
+	for i, tbl := range tables {
+		colIdx := 0
+		if i < len(tableColIndices) {
+			colIdx = tableColIndices[i]
+		}
+		ordered = append(ordered, orderedBlock{bbox: tbl.BBox, colIdx: colIdx, block: tbl})
 	}
 	sort.SliceStable(ordered, func(i, j int) bool {
 		return ReadingOrderLess(ordered[i].bbox, ordered[j].bbox, ordered[i].colIdx, ordered[j].colIdx)
@@ -58,6 +66,53 @@ func (s postProcessStage) Run(ctx parseOutput, blocks []layoutBlock, tables []mo
 		out = append(out, blk)
 	}
 	return out
+}
+
+func (s postProcessStage) assignTableColumns(tables []models.Block, bodyFontSize float32) []int {
+	colIndices := make([]int, len(tables))
+	if len(tables) == 0 {
+		return colIndices
+	}
+
+	// Create a temporary layoutBlock-like structure for column detection
+	type tempBlock struct {
+		bbox   models.BBox
+		colIdx int
+	}
+
+	tmpBlocks := make([]tempBlock, len(tables))
+	for i := range tables {
+		tmpBlocks[i] = tempBlock{bbox: tables[i].BBox, colIdx: 0}
+	}
+
+	// Convert to BlockWithColumn interface by wrapping
+	blockList := make([]column.BlockWithColumn, len(tmpBlocks))
+	for i := range tmpBlocks {
+		blockList[i] = (*columnBlock)(&tmpBlocks[i])
+	}
+
+	// Run column detection
+	column.DetectAndAssignColumns(blockList, bodyFontSize, nil)
+
+	// Extract assigned indices
+	for i := range tmpBlocks {
+		colIndices[i] = tmpBlocks[i].colIdx
+	}
+	return colIndices
+}
+
+// columnBlock implements column.BlockWithColumn interface
+type columnBlock struct {
+	bbox   models.BBox
+	colIdx int
+}
+
+func (cb *columnBlock) GetBBox() models.BBox {
+	return cb.bbox
+}
+
+func (cb *columnBlock) SetColumnIndex(idx int) {
+	cb.colIdx = idx
 }
 
 func (s postProcessStage) parseListItems(text string) ([]models.ListItem, string) {

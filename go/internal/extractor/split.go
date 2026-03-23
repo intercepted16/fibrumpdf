@@ -64,7 +64,7 @@ func (s splitStage) splitRawBlock(ctx parseOutput, lineStart, lineCount int) []s
 					break
 				}
 				sep := "\n"
-				if gap < avgLineFontSize*0.2 || gap < avgLineFontSize*1.4 {
+				if !subBlockIsList && (gap < avgLineFontSize*0.2 || gap < avgLineFontSize*1.4) {
 					sep = " "
 				}
 				textStr.WriteString(sep)
