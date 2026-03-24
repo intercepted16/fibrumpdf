@@ -58,9 +58,7 @@ def _lib(path: Path | None = None):
 
     p = path or find_library()
     if not p or not p.exists():
-        raise ExtractionError(
-            "libtomd not found - build with 'make tomd' or set PYMUPDF4LLM_C_LIB"
-        )
+        raise ExtractionError("libtomd not found")
     log.info("using library: %s", p)
     return load_library(p)
 

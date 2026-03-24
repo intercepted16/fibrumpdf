@@ -97,14 +97,23 @@ func pdfToJson(pdfPath, outputPath string) error {
 		numWorkers = 8
 	}
 	threshold := 2
-	outFile, err := os.Create(outputPath)
+	outputDir := filepath.Dir(outputPath)
+	tempFile, err := os.CreateTemp(outputDir, "tojson-*.tmp")
 	if err != nil {
 		Logger.Error("output file error", "err", err)
 		return err
 	}
-	defer outFile.Close()
-	writer := bufio.NewWriter(outFile)
-	defer writer.Flush()
+	tempPath := tempFile.Name()
+	cleanupTemp := true
+	defer func() {
+		if tempFile != nil {
+			tempFile.Close()
+		}
+		if cleanupTemp {
+			os.Remove(tempPath)
+		}
+	}()
+	writer := bufio.NewWriter(tempFile)
 	if _, err := writer.WriteString("["); err != nil {
 		Logger.Error("write error", "err", err)
 		return err
@@ -202,6 +211,20 @@ func pdfToJson(pdfPath, outputPath string) error {
 		Logger.Error("write error", "err", err)
 		return err
 	}
+	if err := writer.Flush(); err != nil {
+		Logger.Error("write error", "err", err)
+		return err
+	}
+	if err := tempFile.Close(); err != nil {
+		Logger.Error("output file error", "err", err)
+		return err
+	}
+	tempFile = nil
+	if err := os.Rename(tempPath, outputPath); err != nil {
+		Logger.Error("rename error", "err", err)
+		return err
+	}
+	cleanupTemp = false
 
 	totalElapsed := time.Since(startTotal)
 	Logger.Info("raw data extraction", "timeInC", rawElapsed)

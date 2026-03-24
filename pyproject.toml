@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fibrum-pdf"
-version = "1.0.2"
+version = "1.0.3"
 description = "A fast PDF extractor."
 authors = [{ name = "Adit Bajaj" }]
 readme = "README.md"
@@ -12,7 +12,9 @@ requires-python = ">=3.9"
 license = "AGPL-3.0"
 dependencies = [
     "cffi",
-    "pydantic"
+    "ijson",
+    "pydantic",
+    "typer",
 ]
 
 [project.optional-dependencies]
@@ -43,8 +45,8 @@ build = [
 environment = { LD_LIBRARY_PATH = "$PWD/lib/mupdf:$LD_LIBRARY_PATH", PATH = "/usr/local/go/bin:$PATH" }
 before-all = [
     "yum install -y wget tar || (apt-get update && apt-get install -y wget)",
-    "wget -q https://go.dev/dl/go1.21.0.linux-amd64.tar.gz",
-    "tar -C /usr/local -xzf go1.21.0.linux-amd64.tar.gz",
+    "wget -q https://go.dev/dl/go1.24.0.linux-amd64.tar.gz",
+    "tar -C /usr/local -xzf go1.24.0.linux-amd64.tar.gz",
     "/usr/local/go/bin/go version",
     "mkdir -p lib/mupdf",
     "curl -L -o lib/mupdf/libmupdf.so https://github.com/intercepted16/mupdf-prebuilts/releases/download/mupdf-1.27.0/libmupdf.so",
@@ -57,7 +59,8 @@ repair-wheel-command = "auditwheel repair -w {dest_dir} --plat manylinux_2_28_x8
 [tool.cibuildwheel.macos]
 environment = { DYLD_LIBRARY_PATH = "$PWD/lib/mupdf:$DYLD_LIBRARY_PATH" }
 before-all = [
-    "which go || brew install go@1.21 || true",
+    "brew install go@1.24 || brew install go || true",
+    "brew link --overwrite --force go@1.24 || true",
     "go version",
     "mkdir -p lib/mupdf",
     "curl -L -o lib/mupdf/libmupdf.dylib https://github.com/intercepted16/mupdf-prebuilts/releases/download/mupdf-1.27.0/libmupdf.dylib",

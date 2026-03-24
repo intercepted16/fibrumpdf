@@ -14,6 +14,9 @@ import (
 func loadTestPDFPages(t *testing.T, pdfName string) []*raw.PageData {
 	t.Helper()
 	tempDir, err := testutil.ExtractRawFromTestData(pdfName)
+	if err != nil {
+		t.Fatalf("failed to extract raw pages from %s: %v", pdfName, err)
+	}
 
 	t.Cleanup(func() {
 		defer os.RemoveAll(tempDir)
@@ -26,7 +29,7 @@ func loadTestPDFPages(t *testing.T, pdfName string) []*raw.PageData {
 
 	var pages []*raw.PageData
 	for _, f := range files {
-		if !strings.HasSuffix(f.Name(), ".page") {
+		if !strings.HasSuffix(f.Name(), ".raw") {
 			continue
 		}
 		page, err := raw.ReadRawPage(filepath.Join(tempDir, f.Name()))
