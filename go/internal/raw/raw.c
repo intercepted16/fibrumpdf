@@ -366,16 +366,22 @@ static int is_italic_shear_candidate(const fz_stext_char* ch)
     return shear >= 0.24f && shear <= 0.55f;
 }
 
-static void write_all_char_data(fz_buffer* buf, fz_context* ctx, fz_stext_page* stext, int expected_total)
+static void write_chars_from_block_list(fz_buffer* buf, fz_context* ctx, fz_stext_block* block, int* written,
+    fchar** line_buffer_ptr, size_t* line_buffer_capacity_ptr, uint8_t** italic_candidate_ptr, size_t* italic_capacity_ptr)
 {
-    int written = 0;
-    fchar* line_buffer = NULL;
-    size_t line_buffer_capacity = 0;
-    uint8_t* italic_candidate = NULL;
-    size_t italic_capacity = 0;
+    fchar* line_buffer = *line_buffer_ptr;
+    size_t line_buffer_capacity = *line_buffer_capacity_ptr;
+    uint8_t* italic_candidate = *italic_candidate_ptr;
+    size_t italic_capacity = *italic_capacity_ptr;
 
-    for (fz_stext_block* block = stext->first_block; block; block = block->next)
+    for (; block; block = block->next)
     {
+        if (block->type == FZ_STEXT_BLOCK_STRUCT && block->u.s.down)
+        {
+            write_chars_from_block_list(buf, ctx, block->u.s.down->first_block, written,
+                &line_buffer, &line_buffer_capacity, &italic_candidate, &italic_capacity);
+            continue;
+        }
         if (block->type != FZ_STEXT_BLOCK_TEXT)
             continue;
         for (fz_stext_line* line = block->u.t.first_line; line; line = line->next)
@@ -457,13 +463,85 @@ static void write_all_char_data(fz_buffer* buf, fz_context* ctx, fz_stext_page* 
             }
 
             fz_append_data(ctx, buf, line_buffer, (size_t)line_chars * sizeof(fchar));
-            written += line_chars;
+            *written += line_chars;
         }
     }
+
+    *line_buffer_ptr = line_buffer;
+    *line_buffer_capacity_ptr = line_buffer_capacity;
+    *italic_candidate_ptr = italic_candidate;
+    *italic_capacity_ptr = italic_capacity;
+}
+
+static void write_all_char_data(fz_buffer* buf, fz_context* ctx, fz_stext_page* stext, int expected_total)
+{
+    int written = 0;
+    fchar* line_buffer = NULL;
+    size_t line_buffer_capacity = 0;
+    uint8_t* italic_candidate = NULL;
+    size_t italic_capacity = 0;
+
+    write_chars_from_block_list(buf, ctx, stext->first_block, &written,
+        &line_buffer, &line_buffer_capacity, &italic_candidate, &italic_capacity);
 
     free(line_buffer);
     free(italic_candidate);
     (void)expected_total;
+}
+
+static void append_text_blocks_and_lines(fz_context* ctx, fz_stext_block* block, fz_buffer* blocks_buf, fz_buffer* lines_buf,
+    int* total_blocks, int* total_lines, int* total_chars, int* line_idx, int* char_idx)
+{
+    for (; block; block = block->next)
+    {
+        if (block->type == FZ_STEXT_BLOCK_STRUCT && block->u.s.down)
+        {
+            append_text_blocks_and_lines(ctx, block->u.s.down->first_block, blocks_buf, lines_buf,
+                total_blocks, total_lines, total_chars, line_idx, char_idx);
+            continue;
+        }
+        fblock rb = {0};
+        rb.type = block->type;
+        rb.bbox_x0 = block->bbox.x0;
+        rb.bbox_y0 = block->bbox.y0;
+        rb.bbox_x1 = block->bbox.x1;
+        rb.bbox_y1 = block->bbox.y1;
+        rb.line_start = *line_idx;
+        rb.line_count = 0;
+
+        if (block->type == FZ_STEXT_BLOCK_TEXT)
+        {
+            for (fz_stext_line* line = block->u.t.first_line; line; line = line->next)
+            {
+                rb.line_count++;
+                fline rl = {0};
+                rl.bbox_x0 = line->bbox.x0;
+                rl.bbox_y0 = line->bbox.y0;
+                rl.bbox_x1 = line->bbox.x1;
+                rl.bbox_y1 = line->bbox.y1;
+                rl.char_start = *char_idx;
+                rl.char_count = 0;
+
+                for (fz_stext_char* ch = line->first_char; ch; ch = ch->next)
+                {
+                    rl.char_count++;
+                    (*total_chars)++;
+                }
+                *char_idx += rl.char_count;
+
+                fz_append_data(ctx, lines_buf, &rl, sizeof(fline));
+                (*total_lines)++;
+            }
+            *line_idx += rb.line_count;
+        }
+        else
+        {
+            continue;
+        }
+
+        fz_append_data(ctx, blocks_buf, &rb, sizeof(fblock));
+        (*total_blocks)++;
+    }
 }
 
 static int count_links(fz_link* links) {
@@ -483,6 +561,7 @@ static int extract_page_to_file(fz_context* ctx, fz_document* doc, int page_num,
     fz_buffer* edges_buf = NULL;
     fz_buffer* output_buf = NULL;
     fz_device* combined_dev = NULL;
+    fz_device* stext_dev = NULL;
 
     fz_try(ctx)
     {
@@ -496,13 +575,16 @@ static int extract_page_to_file(fz_context* ctx, fz_document* doc, int page_num,
         opts.flags = FZ_STEXT_PRESERVE_WHITESPACE | FZ_STEXT_ACCURATE_BBOXES | FZ_STEXT_COLLECT_STYLES;
         stext = fz_new_stext_page(ctx, bounds);
 
-        fz_device* stext_dev = fz_new_stext_device(ctx, stext, &opts);
+        stext_dev = fz_new_stext_device(ctx, stext, &opts);
+
+        fz_run_page(ctx, page, stext_dev, fz_identity, NULL);
+        fz_close_device(ctx, stext_dev);
 
         edges_buf = fz_new_buffer(ctx, 256 * 1024);
 
         combined_device* cdev = fz_new_derived_device(ctx, combined_device);
         combined_dev = &cdev->super;
-        cdev->stext_dev = stext_dev;
+        cdev->stext_dev = NULL;
         cdev->edges_buf = edges_buf;
 
         combined_dev->close_device = combined_close_device;
@@ -533,46 +615,8 @@ static int extract_page_to_file(fz_context* ctx, fz_document* doc, int page_num,
         int line_idx = 0;
         int char_idx = 0;
 
-        for (fz_stext_block* block = stext->first_block; block; block = block->next)
-        {
-            fblock rb = {0};
-            rb.type = block->type;
-            rb.bbox_x0 = block->bbox.x0;
-            rb.bbox_y0 = block->bbox.y0;
-            rb.bbox_x1 = block->bbox.x1;
-            rb.bbox_y1 = block->bbox.y1;
-            rb.line_start = line_idx;
-            rb.line_count = 0;
-
-            if (block->type == FZ_STEXT_BLOCK_TEXT)
-            {
-                for (fz_stext_line* line = block->u.t.first_line; line; line = line->next)
-                {
-                    rb.line_count++;
-                    fline rl = {0};
-                    rl.bbox_x0 = line->bbox.x0;
-                    rl.bbox_y0 = line->bbox.y0;
-                    rl.bbox_x1 = line->bbox.x1;
-                    rl.bbox_y1 = line->bbox.y1;
-                    rl.char_start = char_idx;
-                    rl.char_count = 0;
-
-                    for (fz_stext_char* ch = line->first_char; ch; ch = ch->next)
-                    {
-                        rl.char_count++;
-                        total_chars++;
-                    }
-                    char_idx += rl.char_count;
-                    
-                    fz_append_data(ctx, lines_buf, &rl, sizeof(fline));
-                    total_lines++;
-                }
-                line_idx += rb.line_count;
-            }
-            
-            fz_append_data(ctx, blocks_buf, &rb, sizeof(fblock));
-            total_blocks++;
-        }
+        append_text_blocks_and_lines(ctx, stext->first_block, blocks_buf, lines_buf,
+            &total_blocks, &total_lines, &total_chars, &line_idx, &char_idx);
 
         int page_number = page_num + 1;
         filter_edges(ctx, edges_buf);
@@ -628,6 +672,8 @@ static int extract_page_to_file(fz_context* ctx, fz_document* doc, int page_num,
             fclose(out);
         if (combined_dev)
             fz_drop_device(ctx, combined_dev);
+        if (stext_dev)
+            fz_drop_device(ctx, stext_dev);
         if (page_links)
             fz_drop_link(ctx, page_links);
         if (stext)
@@ -659,8 +705,11 @@ char* extract_all_pages(const char* pdf_path)
     if (!temp_dir)
         return NULL;
 
-    snprintf(temp_dir, 256, ".fibrum_pdf_%ld_%u", (long)time(NULL), (unsigned)getpid());
-    mkdir(temp_dir, 0755);
+    snprintf(temp_dir, 256, "/tmp/fibrum_pdf_%ld_%u_XXXXXX", (long)time(NULL), (unsigned)getpid());
+    if (!mkdtemp(temp_dir)) {
+        free(temp_dir);
+        return NULL;
+    }
 
     fz_context* ctx = fz_new_context(NULL, NULL, FZ_STORE_SIZE);
 
