@@ -66,8 +66,10 @@ def _join_spans(spans: list[dict[str, Any]]) -> str:
 
 def _cell_text(cell: dict[str, Any]) -> str:
     if spans := cell.get("spans"):
-        return " ".join(s.get("text", "") for s in spans).strip().replace("|", "\\|")
-    return cell.get("text", "").strip().replace("|", "\\|")
+        text = " ".join(s.get("text", "") for s in spans).strip()
+    else:
+        text = cell.get("text", "").strip()
+    return text.replace("|", "\\|").replace("\n", "<br>")
 
 
 def _table(rows: list[dict[str, Any]]) -> str:
