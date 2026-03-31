@@ -4,10 +4,6 @@ include LICENSE
 include BUILD.md
 
 
-recursive-include include *.h
-recursive-include src *.c
-
-
 recursive-include mupdf/include *.h
 
 include lib/mupdf/libmupdf.so*
