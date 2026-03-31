@@ -42,7 +42,15 @@ func (p tableExtractionPipeline) run(raw *rawdata.PageData) []models.Block {
 	materialized := p.materializer.run(raw, detected)
 	selected := p.selector.run(raw.PageRect(), materialized)
 	if len(selected.tables) == 0 {
-		return nil
+		borderlessDetected := p.detector.runBorderless(raw)
+		if len(borderlessDetected.tables) == 0 {
+			return nil
+		}
+		borderlessMaterialized := p.materializer.run(raw, borderlessDetected)
+		selected = p.selector.run(raw.PageRect(), borderlessMaterialized)
+		if len(selected.tables) == 0 {
+			return nil
+		}
 	}
 	return p.converter.run(selected)
 }
@@ -51,12 +59,18 @@ type tableDetector struct{}
 
 func (s tableDetector) run(raw *rawdata.PageData) detectedTables {
 	pageRect := raw.PageRect()
-	if len(raw.Edges) >= 5 && !(len(raw.Edges) > maxEdgesForGrid && len(raw.Chars) > heavyCharCount) {
+	// Reduced edge threshold from 5 to 3 to detect tables with fewer borders
+	if len(raw.Edges) >= 3 && !(len(raw.Edges) > maxEdgesForGrid && len(raw.Chars) > heavyCharCount) {
 		tables := detectTables(raw.Edges, pageRect, raw.PageNumber)
 		if tables != nil && !tables.isEmpty() {
 			return detectedTables{tables: tables.Tables}
 		}
 	}
+	return s.runBorderless(raw)
+}
+
+func (s tableDetector) runBorderless(raw *rawdata.PageData) detectedTables {
+	pageRect := raw.PageRect()
 	tables := detectBorderlessTables(raw, pageRect)
 	if tables == nil || tables.isEmpty() {
 		return detectedTables{}
@@ -87,6 +101,7 @@ func (s tableMaterializer) run(raw *rawdata.PageData, in detectedTables) materia
 				cell.Text = extractTextInRect(raw, cell.BBox)
 			}
 		}
+		cleanupMaterializedTable(tbl)
 	}
 	return materializedTables{tables: tables}
 }
@@ -274,4 +289,126 @@ func convertTableRows(tbl Table) ([]models.TableRow, int) {
 		rows = append(rows, models.TableRow{BBox: models.BBox{r.BBox.X0, r.BBox.Y0, r.BBox.X1, r.BBox.Y1}, Cells: cells})
 	}
 	return rows, visibleRows
+}
+
+func cleanupMaterializedTable(tbl *Table) {
+	if tbl == nil || len(tbl.Rows) == 0 {
+		return
+	}
+	maxCols := 0
+	for _, row := range tbl.Rows {
+		if len(row.Cells) > maxCols {
+			maxCols = len(row.Cells)
+		}
+	}
+	if maxCols == 0 {
+		return
+	}
+	for i := range tbl.Rows {
+		if len(tbl.Rows[i].Cells) >= maxCols {
+			continue
+		}
+		padded := make([]Cell, maxCols)
+		copy(padded, tbl.Rows[i].Cells)
+		tbl.Rows[i].Cells = padded
+	}
+	dropTextEmptyColumns(tbl)
+	mergeCurrencyValueColumns(tbl)
+}
+
+func dropTextEmptyColumns(tbl *Table) {
+	if tbl == nil || len(tbl.Rows) == 0 || len(tbl.Rows[0].Cells) == 0 {
+		return
+	}
+	colCount := len(tbl.Rows[0].Cells)
+	keep := make([]bool, colCount)
+	for _, row := range tbl.Rows {
+		for ci := 0; ci < min(colCount, len(row.Cells)); ci++ {
+			if strings.TrimSpace(row.Cells[ci].Text) != "" {
+				keep[ci] = true
+			}
+		}
+	}
+	newCount := 0
+	for _, ok := range keep {
+		if ok {
+			newCount++
+		}
+	}
+	if newCount == 0 || newCount == colCount {
+		return
+	}
+	for ri := range tbl.Rows {
+		newCells := make([]Cell, 0, newCount)
+		for ci, ok := range keep {
+			if ok && ci < len(tbl.Rows[ri].Cells) {
+				newCells = append(newCells, tbl.Rows[ri].Cells[ci])
+			}
+		}
+		tbl.Rows[ri].Cells = newCells
+	}
+}
+
+func mergeCurrencyValueColumns(tbl *Table) {
+	if tbl == nil || len(tbl.Rows) == 0 || len(tbl.Rows[0].Cells) < 2 {
+		return
+	}
+	colCount := len(tbl.Rows[0].Cells)
+	for ci := 0; ci < colCount-1; ci++ {
+		prefixRows := 0
+		for _, row := range tbl.Rows {
+			if ci+1 >= len(row.Cells) {
+				continue
+			}
+			left := strings.TrimSpace(row.Cells[ci].Text)
+			right := strings.TrimSpace(row.Cells[ci+1].Text)
+			if isCurrencyPrefix(left) && looksNumericValue(right) {
+				prefixRows++
+			}
+		}
+		if prefixRows == 0 {
+			continue
+		}
+		for ri := range tbl.Rows {
+			if ci+1 >= len(tbl.Rows[ri].Cells) {
+				continue
+			}
+			left := strings.TrimSpace(tbl.Rows[ri].Cells[ci].Text)
+			right := strings.TrimSpace(tbl.Rows[ri].Cells[ci+1].Text)
+			if !isCurrencyPrefix(left) || !looksNumericValue(right) {
+				continue
+			}
+			tbl.Rows[ri].Cells[ci+1].Text = left + right
+			tbl.Rows[ri].Cells[ci+1].BBox = tbl.Rows[ri].Cells[ci].BBox.Union(tbl.Rows[ri].Cells[ci+1].BBox)
+			tbl.Rows[ri].Cells[ci] = Cell{}
+		}
+		dropTextEmptyColumns(tbl)
+		colCount = len(tbl.Rows[0].Cells)
+		ci--
+	}
+}
+
+func isCurrencyPrefix(s string) bool {
+	switch s {
+	case "$", "€", "£", "¥":
+		return true
+	default:
+		return false
+	}
+}
+
+func looksNumericValue(s string) bool {
+	hasDigit := false
+	for _, r := range s {
+		if r >= '0' && r <= '9' {
+			hasDigit = true
+			continue
+		}
+		switch r {
+		case ',', '.', ' ', '-', '(', ')':
+		default:
+			return false
+		}
+	}
+	return hasDigit
 }

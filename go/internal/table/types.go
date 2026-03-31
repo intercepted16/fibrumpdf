@@ -8,9 +8,9 @@ import (
 const (
 	snapTolRatio    = 0.015
 	joinTolRatio    = 0.005
-	minCellRatio    = 0.003
+	minCellRatio    = 0.002  // Reduced from 0.003 to allow smaller cells
 	maxCellWRatio   = 0.95
-	maxCellHRatio   = 0.25
+	maxCellHRatio   = 0.50
 	splitGapRatio   = 0.10
 	rowYTolRatio    = 0.015
 	colXTolRatio    = 0.003
@@ -30,8 +30,9 @@ type Cell struct {
 }
 
 type Row struct {
-	BBox  geometry.Rect
-	Cells []Cell
+	BBox     geometry.Rect
+	Cells    []Cell
+	IsHeader bool // true if this row is part of a merged header group
 }
 
 type Table struct {

@@ -8,7 +8,6 @@ import (
 	"github.com/pymupdf4llm-c/go/internal/geometry"
 	"github.com/pymupdf4llm-c/go/internal/logger"
 	rawdata "github.com/pymupdf4llm-c/go/internal/raw"
-	"github.com/tidwall/rtree"
 )
 
 var Logger = logger.GetLogger("table")
@@ -16,29 +15,77 @@ var Logger = logger.GetLogger("table")
 func cordToInt(x float64) int { return int(x*cordScale + 0.5) }
 
 func hasEdge(edges []Edge, x0, y0, x1, y1, eps float64) bool {
-	for _, e := range edges {
-		if e.Orientation == rawdata.EdgeHorizontal {
-			if math.Abs(e.Y0-y0) < eps && math.Abs(e.Y1-y1) < eps &&
-				e.X0-eps <= math.Min(x0, x1) && e.X1+eps >= math.Max(x0, x1) {
-				return true
-			}
-		} else {
-			if math.Abs(e.X0-x0) < eps && math.Abs(e.X1-x1) < eps &&
-				e.Y0-eps <= math.Min(y0, y1) && e.Y1+eps >= math.Max(y0, y1) {
-				return true
+	// For horizontal edges (y0 ≈ y1), we check X coverage
+	// For vertical edges (x0 ≈ x1), we check Y coverage
+	isHorizontal := math.Abs(y0-y1) < eps
+
+	if isHorizontal {
+		// Check if horizontal edges at this Y position cover the X span
+		targetY := (y0 + y1) / 2
+		spanStart, spanEnd := math.Min(x0, x1), math.Max(x0, x1)
+
+		// Collect all edges near this Y
+		var coveringEdges []struct{ x0, x1 float64 }
+		for _, e := range edges {
+			if e.Orientation == rawdata.EdgeHorizontal && math.Abs(e.Y0-targetY) < eps {
+				coveringEdges = append(coveringEdges, struct{ x0, x1 float64 }{e.X0, e.X1})
 			}
 		}
+
+		// Check if the span is covered (allowing small gaps)
+		return spanIsCovered(coveringEdges, spanStart, spanEnd, eps)
+	} else {
+		// Check if vertical edges at this X position cover the Y span
+		targetX := (x0 + x1) / 2
+		spanStart, spanEnd := math.Min(y0, y1), math.Max(y0, y1)
+
+		// Collect all edges near this X
+		var coveringEdges []struct{ x0, x1 float64 }
+		for _, e := range edges {
+			if e.Orientation == rawdata.EdgeVertical && math.Abs(e.X0-targetX) < eps {
+				coveringEdges = append(coveringEdges, struct{ x0, x1 float64 }{e.Y0, e.Y1})
+			}
+		}
+
+		// Check if the span is covered (allowing small gaps)
+		return spanIsCovered(coveringEdges, spanStart, spanEnd, eps)
 	}
-	return false
 }
 
-func findCells(points []geometry.Point, tr *rtree.RTreeG[geometry.Point], pageRect geometry.Rect, hEdges, vEdges []Edge, avgEdgeSpacing float64) []geometry.Rect {
-	if len(points) < 4 {
-		return nil
+// spanIsCovered checks if a set of segments collectively cover [spanStart, spanEnd]
+// allowing small gaps up to eps
+func spanIsCovered(segments []struct{ x0, x1 float64 }, spanStart, spanEnd, eps float64) bool {
+	if len(segments) == 0 {
+		return false
 	}
+
+	// Sort segments by start position
+	sort.Slice(segments, func(i, j int) bool { return segments[i].x0 < segments[j].x0 })
+
+	// Merge overlapping/adjacent segments and check coverage
+	mergedStart := segments[0].x0
+	mergedEnd := segments[0].x1
+	for i := 1; i < len(segments); i++ {
+		if segments[i].x0 <= mergedEnd+eps { // allow small gap
+			if segments[i].x1 > mergedEnd {
+				mergedEnd = segments[i].x1
+			}
+		} else {
+			// Gap too large, reset
+			if mergedStart-eps <= spanStart && mergedEnd+eps >= spanEnd {
+				return true
+			}
+			mergedStart = segments[i].x0
+			mergedEnd = segments[i].x1
+		}
+	}
+
+	return mergedStart-eps <= spanStart && mergedEnd+eps >= spanEnd
+}
+
+func findCells(pageRect geometry.Rect, hEdges, vEdges []Edge, avgEdgeSpacing float64) []geometry.Rect {
 	pw, ph := pageRect.Width(), pageRect.Height()
 	minSize, maxW, maxH := geometry.Min32(pw, ph)*minCellRatio, pw*maxCellWRatio, ph*maxCellHRatio
-	snapDist := pw * snapTolRatio
 	eps := avgEdgeSpacing * 0.3
 	if eps < 1.0 {
 		eps = 1.0
@@ -47,89 +94,67 @@ func findCells(points []geometry.Point, tr *rtree.RTreeG[geometry.Point], pageRe
 	if len(gridCols) < 2 || len(gridRows) < 2 {
 		return nil
 	}
-	sorted := make([]geometry.Point, len(points))
-	copy(sorted, points)
-	sort.Slice(sorted, func(i, j int) bool {
-		if dy := sorted[i].Y - sorted[j].Y; math.Abs(float64(dy)) > 0.1 {
-			return dy < 0
-		}
-		return sorted[i].X < sorted[j].X
-	})
-	var snapped []geometry.Point
-	for _, p := range sorted {
-		merged := false
-		for i := range snapped {
-			if geometry.Abs32(p.X-snapped[i].X) < snapDist && geometry.Abs32(p.Y-snapped[i].Y) < snapDist {
-				snapped[i].X, snapped[i].Y = (snapped[i].X+p.X)/2, (snapped[i].Y+p.Y)/2
-				merged = true
-				break
-			}
-		}
-		if !merged {
-			snapped = append(snapped, p)
-		}
-	}
-	gridPoints := filterPointsToGrid(snapped, gridCols, gridRows, float32(eps))
+
+	// Build grid-based cells directly from grid lines. This produces non-overlapping
+	// cells that align with the detected grid structure.
+
 	var cells []geometry.Rect
-	for i, p1 := range gridPoints {
-		for j := i + 1; j < len(gridPoints); j++ {
-			if float64(gridPoints[j].Y-p1.Y) > eps {
-				break
-			}
-			p2 := gridPoints[j]
-			if p2.X <= p1.X+minSize {
-				continue
-			}
-			topEdgeOk := hasEdge(hEdges, float64(p1.X), float64(p1.Y), float64(p2.X), float64(p1.Y), eps)
-			for _, p3 := range gridPoints {
-				if p3.Y <= p1.Y+minSize || math.Abs(float64(p3.X-p1.X)) > eps {
-					continue
-				}
-				leftEdgeOk := hasEdge(vEdges, float64(p1.X), float64(p1.Y), float64(p1.X), float64(p3.Y), eps)
-				found := false
-				tr.Search([2]float64{float64(p2.X) - eps, float64(p3.Y) - eps}, [2]float64{float64(p2.X) + eps, float64(p3.Y) + eps}, func(_, _ [2]float64, _ geometry.Point) bool {
-					rightEdgeOk := hasEdge(vEdges, float64(p2.X), float64(p2.Y), float64(p2.X), float64(p3.Y), eps)
-					bottomEdgeOk := hasEdge(hEdges, float64(p3.X), float64(p3.Y), float64(p2.X), float64(p3.Y), eps)
-					edgeCount := 0
-					if topEdgeOk {
-						edgeCount++
-					}
-					if leftEdgeOk {
-						edgeCount++
-					}
-					if rightEdgeOk {
-						edgeCount++
-					}
-					if bottomEdgeOk {
-						edgeCount++
-					}
-					if edgeCount >= 2 {
-						found = true
-						return false
-					}
-					return true
-				})
-				if found {
-					cell := geometry.Rect{X0: p1.X, Y0: p1.Y, X1: p2.X, Y1: p3.Y}
-					if w, h := cell.Width(), cell.Height(); w > minSize && w < maxW && h > minSize && h < maxH {
-						cells = append(cells, cell)
-					}
-				}
-			}
-		}
-	}
-	if len(cells) >= 4 {
-		return cells
-	}
-	cells = cells[:0]
 	for ri := 0; ri < len(gridRows)-1; ri++ {
 		for ci := 0; ci < len(gridCols)-1; ci++ {
 			cell := geometry.Rect{X0: gridCols[ci], Y0: gridRows[ri], X1: gridCols[ci+1], Y1: gridRows[ri+1]}
-			if w, h := cell.Width(), cell.Height(); w > minSize && w < maxW && h > minSize && h < maxH {
+			w, h := cell.Width(), cell.Height()
+			sizeOk := w > minSize && w < maxW && h > minSize && h < maxH
+			if !sizeOk {
+				continue
+			}
+			// Check edge support for this cell
+			topEdgeOk := hasEdge(hEdges, float64(cell.X0), float64(cell.Y0), float64(cell.X1), float64(cell.Y0), eps)
+			bottomEdgeOk := hasEdge(hEdges, float64(cell.X0), float64(cell.Y1), float64(cell.X1), float64(cell.Y1), eps)
+			leftEdgeOk := hasEdge(vEdges, float64(cell.X0), float64(cell.Y0), float64(cell.X0), float64(cell.Y1), eps)
+			rightEdgeOk := hasEdge(vEdges, float64(cell.X1), float64(cell.Y0), float64(cell.X1), float64(cell.Y1), eps)
+			edgeCount := 0
+			if topEdgeOk {
+				edgeCount++
+			}
+			if bottomEdgeOk {
+				edgeCount++
+			}
+			if leftEdgeOk {
+				edgeCount++
+			}
+			if rightEdgeOk {
+				edgeCount++
+			}
+			// Accept cells with at least 2 edges OR cells with at least 1 edge in tables
+			// with good grid structure (many grid lines). Relaxed to accept more partial borders.
+			minEdges := 2
+			if len(gridCols) >= 4 && len(gridRows) >= 4 {
+				minEdges = 1 // Relaxed for well-structured grids
+			}
+			// Also accept cells with just 1 edge if grid is very regular (≥6 lines)
+			if len(gridCols) >= 6 || len(gridRows) >= 6 {
+				minEdges = 1
+			}
+			if edgeCount >= minEdges {
 				cells = append(cells, cell)
 			}
 		}
 	}
+
+	// If we didn't find enough cells with edge support, fall back to all grid cells
+	// Relaxed threshold from 4 to 3 to be more aggressive with partial tables
+	if len(cells) < 3 && len(gridRows) >= 2 && len(gridCols) >= 2 {
+		cells = cells[:0]
+		for ri := 0; ri < len(gridRows)-1; ri++ {
+			for ci := 0; ci < len(gridCols)-1; ci++ {
+				cell := geometry.Rect{X0: gridCols[ci], Y0: gridRows[ri], X1: gridCols[ci+1], Y1: gridRows[ri+1]}
+				if w, h := cell.Width(), cell.Height(); w > minSize && w < maxW && h > minSize && h < maxH {
+					cells = append(cells, cell)
+				}
+			}
+		}
+	}
+
 	return cells
 }
 
@@ -169,33 +194,6 @@ func findGridLines(hEdges, vEdges []Edge, eps float64, pageRect geometry.Rect) (
 	slices.Sort(gridCols)
 	slices.Sort(gridRows)
 	return gridCols, gridRows
-}
-
-func filterPointsToGrid(points []geometry.Point, gridCols, gridRows []float32, eps float32) []geometry.Point {
-	var result []geometry.Point
-	for _, p := range points {
-		onCol := false
-		for _, x := range gridCols {
-			if IsNearby(p.X, x, eps) {
-				onCol = true
-				break
-			}
-		}
-		if !onCol {
-			continue
-		}
-		onRow := false
-		for _, y := range gridRows {
-			if IsNearby(p.Y, y, eps) {
-				onRow = true
-				break
-			}
-		}
-		if onRow {
-			result = append(result, p)
-		}
-	}
-	return result
 }
 
 func deduplicateCells(cells []geometry.Rect) []geometry.Rect {
@@ -524,31 +522,6 @@ func mergeEdges(edges []Edge, snapTol, joinTol float64) []Edge {
 	return result
 }
 
-func findIntersections(vEdges, hEdges []Edge, tr *rtree.RTreeG[geometry.Point], eps float64) {
-	tolInt := cordToInt(eps)
-	for _, v := range vEdges {
-		vXInt, vY0Int, vY1Int := cordToInt(v.X0), cordToInt(v.Y0), cordToInt(v.Y1)
-		for _, h := range hEdges {
-			hYInt := cordToInt(h.Y0)
-			if hYInt < vY0Int-tolInt || hYInt > vY1Int+tolInt {
-				continue
-			}
-			hX0Int, hX1Int := cordToInt(h.X0), cordToInt(h.X1)
-			if hX0Int-tolInt <= vXInt && hX1Int+tolInt >= vXInt {
-				p := geometry.Point{X: float32(v.X0), Y: float32(h.Y0)}
-				exists := false
-				tr.Search([2]float64{float64(p.X - 0.1), float64(p.Y - 0.1)}, [2]float64{float64(p.X + 0.1), float64(p.Y + 0.1)}, func(_, _ [2]float64, _ geometry.Point) bool {
-					exists = true
-					return false
-				})
-				if !exists {
-					tr.Insert([2]float64{float64(p.X), float64(p.Y)}, [2]float64{float64(p.X), float64(p.Y)}, p)
-				}
-			}
-		}
-	}
-}
-
 func computeAvgCharWidth(chars []rawdata.Char) float32 {
 	var total float32
 	var count int
@@ -612,20 +585,7 @@ func detectTables(bridgeEdges []rawdata.Edge, pageRect geometry.Rect, pageNum in
 	}
 	avgEdgeSpacing := computeAvgEdgeSpacing(hEdges, vEdges)
 	Logger.Debug("avg edge spacing", "page", pageNum, "spacing", avgEdgeSpacing)
-	ph := float64(pageRect.Height())
-	eps := math.Sqrt(pw*pw+ph*ph) * intersectRatio
-	var tr rtree.RTreeG[geometry.Point]
-	findIntersections(vEdges, hEdges, &tr, eps)
-	var points []geometry.Point
-	tr.Scan(func(_, _ [2]float64, value geometry.Point) bool {
-		points = append(points, value)
-		return true
-	})
-	Logger.Debug("found intersection points", "page", pageNum, "count", len(points))
-	if len(points) < 4 {
-		return nil
-	}
-	cells := findCells(points, &tr, pageRect, hEdges, vEdges, avgEdgeSpacing)
+	cells := findCells(pageRect, hEdges, vEdges, avgEdgeSpacing)
 	Logger.Debug("found cells", "page", pageNum, "count", len(cells))
 	if len(cells) == 0 {
 		return nil
