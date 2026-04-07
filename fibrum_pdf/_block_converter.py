@@ -11,21 +11,16 @@ log = logging.getLogger(__name__)
 BULLETS = frozenset("•‣⁃⁌⁍∙▪▫●○◦■□▶▸◆◇♦➤\uf0b7\ufffd")
 FMT_MARKERS = ("**", "*", "`", "~~")
 PUNCT = " \n\t.,;:)]/\\-?!"
-STYLES = [
-    ("bold", "**"),
-    ("italic", "*"),
-    ("strikeout", "~~"),
-    ("subscript", "~"),
-]
+STYLES = [("bold", "**"), ("italic", "*"), ("strikeout", "~~"), ("subscript", "~")]
 
 
 def _style_span(span: dict[str, Any]) -> str:
-    text = span.get("text", "")
-    if not text:
+    if not (text := span.get("text", "")):
         return ""
-    link = span.get("link") or span.get("uri") or ""
-    if not isinstance(link, str):
-        link = ""
+    link = (
+        next((span.get(k) for k in ["link", "uri"] if isinstance(span.get(k), str)), "")
+        or ""
+    )
     if span.get("superscript"):
         s = text.strip()
         text = f"[{s}]" if s.isdigit() or re.match(r"^\d+[,\s\d]*$", s) else f"^{text}^"
@@ -33,18 +28,13 @@ def _style_span(span: dict[str, Any]) -> str:
     for key, fmt in STYLES:
         if span.get(key):
             text = f"{fmt}{text}{fmt}"
-    if link:
-        text = f"[{text}]({link})"
-    return text
+    return f"[{text}]({link})" if link else text
 
 
 def _join_spans(spans: list[dict[str, Any]]) -> str:
-    if not spans:
-        return ""
-    parts: list[str] = []
+    parts = []
     for i, span in enumerate(spans):
-        styled = _style_span(span)
-        if not styled:
+        if not (styled := _style_span(span)):
             continue
         if (
             parts
@@ -53,53 +43,52 @@ def _join_spans(spans: list[dict[str, Any]]) -> str:
         ):
             parts.append(" ")
         parts.append(styled)
-        if i + 1 < len(spans):
-            nxt = spans[i + 1].get("text", "")
-            if (
-                any(styled.endswith(m) for m in FMT_MARKERS)
-                and nxt
-                and nxt[0] not in PUNCT
-            ):
-                parts.append(" ")
+        if (
+            i + 1 < len(spans)
+            and (nxt := spans[i + 1].get("text", ""))
+            and any(styled.endswith(m) for m in FMT_MARKERS)
+            and nxt[0] not in PUNCT
+        ):
+            parts.append(" ")
     return "".join(parts)
 
 
 def _cell_text(cell: dict[str, Any]) -> str:
-    if spans := cell.get("spans"):
-        text = " ".join(s.get("text", "") for s in spans).strip()
-    else:
-        text = cell.get("text", "").strip()
+    text = (
+        " ".join(s.get("text", "") for s in (cell.get("spans") or [])).strip()
+        if cell.get("spans")
+        else cell.get("text", "").strip()
+    )
     return text.replace("|", "\\|").replace("\n", "<br>")
 
 
 def _table(rows: list[dict[str, Any]]) -> str:
-    if not rows:
+    if (
+        not rows
+        or not (
+            matrix := [[_cell_text(c) for c in row.get("cells", [])] for row in rows]
+        )
+        or not any(matrix[0])
+    ):
         return ""
-    matrix = [[_cell_text(c) for c in row.get("cells", [])] for row in rows]
-    hdr = matrix[0] if matrix else []
-    lines: list[str] = []
-    if any(hdr):
-        lines += [
-            "| " + " | ".join(hdr) + " |",
-            "| " + " | ".join("---" for _ in hdr) + " |",
-        ]
+    hdr = matrix[0]
+    lines = [
+        "| " + " | ".join(hdr) + " |",
+        "| " + " | ".join("---" for _ in hdr) + " |",
+    ]
     for row in matrix[1:]:
-        if len(row) < len(hdr):
-            row = row + [""] * (len(hdr) - len(row))
-        elif len(row) > len(hdr):
-            row = row[: len(hdr)]
+        row = (row + [""] * len(hdr))[: len(hdr)]
         lines.append("| " + " | ".join(row) + " |")
-    return "\n".join(lines) + "\n" if lines else ""
+    return "\n".join(lines) + "\n"
 
 
 def _list(block: dict[str, Any], text: str) -> str:
     if items := block.get("items"):
-        lines: list[str] = []
-        for item in items:
-            if t := _join_spans(item.get("spans", [])):
-                ind = "  " * item.get("indent", 0)
-                mark = f"{item.get('prefix')} " if item.get("prefix") else "- "
-                lines.append(f"{ind}{mark}{t.strip()}")
+        lines = [
+            f"{'  ' * item.get('indent', 0)}{item.get('prefix', '-') + ' ' if item.get('prefix') else '- '}{t.strip()}"
+            for item in items
+            if (t := _join_spans(item.get("spans", [])))
+        ]
         return "\n".join(lines) + "\n" if lines else ""
     return (
         "\n".join(f"- {ln.strip()}" for ln in text.split("\n") if ln.strip()) + "\n"
@@ -111,29 +100,26 @@ def _list(block: dict[str, Any], text: str) -> str:
 def block_to_markdown(block: dict[str, Any]) -> str:
     typ = block.get("type", "")
     text = block.get("text", "").strip() or _join_spans(block.get("spans", []))
+    if not text and typ not in ("table", "list"):
+        return ""
 
-    match typ:
-        case "heading" if text:
-            level = int(block.get("level") or 1)
-            level = max(1, min(level, 6))
-            if level >= 4:
-                plain = (block.get("text") or "").strip()
-                if not plain:
-                    plain = "".join(
-                        str(span.get("text", "")) for span in block.get("spans", [])
-                    ).strip()
-                return f"**{plain or text}**\n"
-            return f"{'#' * level} **{text}**\n"
-        case "paragraph" | "text" if text:
-            return f"{text}\n"
-        case "code" if text:
-            return f"{text}\n"
-        case "table":
-            return _table(block.get("rows", []))
-        case "list":
-            return _list(block, text)
-        case "figure":
-            return f"![Figure]({block.get('text', 'figure')})\n"
-        case _:
-            log.debug("skipping block type=%s", typ)
-            return ""
+    if typ == "heading":
+        level = max(1, min(int(block.get("level") or 1), 6))
+        if level >= 4:
+            plain = (block.get("text") or "").strip() or "".join(
+                str(span.get("text", "")) for span in block.get("spans", [])
+            ).strip()
+            return f"**{plain or text}**\n"
+        return f"{'#' * level} **{text}**\n"
+    elif typ in ("paragraph", "text"):
+        return f"{text}\n"
+    elif typ == "code":
+        return f"{text}\n"
+    elif typ == "table":
+        return _table(block.get("rows", []))
+    elif typ == "list":
+        return _list(block, text)
+    elif typ == "figure":
+        return f"![Figure]({block.get('text', 'figure')})\n"
+    log.debug("skipping block type=%s", typ)
+    return ""

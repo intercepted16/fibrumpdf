@@ -8,10 +8,9 @@ import os
 import sys
 import tempfile
 from contextlib import contextmanager
-from functools import cached_property
-from functools import lru_cache
+from functools import cached_property, lru_cache
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Iterator, cast
+from typing import TYPE_CHECKING, Any, Iterator
 
 if TYPE_CHECKING:
     from .models import Page, Pages
@@ -35,10 +34,10 @@ class ExtractionError(Exception):
 
 @contextmanager
 def _redirect_c_output() -> Iterator[str]:
-    saved = os.dup(1), os.dup(2)
     capture = _capture_path()
-    fd = os.open(capture, os.O_WRONLY | os.O_TRUNC)
+    saved = os.dup(1), os.dup(2)
     try:
+        fd = os.open(capture, os.O_WRONLY | os.O_TRUNC)
         os.dup2(fd, 1)
         os.dup2(fd, 2)
         os.close(fd)
@@ -75,31 +74,21 @@ class ConversionResult:
     def _load(self) -> list[Any]:
         with open(self.path, encoding="utf-8") as f:
             data = json.load(f)
-        if isinstance(data, list):
-            return cast(list[Any], data)
-        return []
+            return data if isinstance(data, list) else []
 
     @cached_property
     def markdown(self) -> str:
         from ._block_converter import block_to_markdown
 
-        page_markdown: list[str] = []
+        markdowns = []
         for page in self._load():
-            if not isinstance(page, dict):
-                continue
-            page_dict = cast(dict[str, Any], page)
-            blocks = page_dict.get("data", [])
-            if not isinstance(blocks, list):
-                continue
-            blocks = cast(list[dict[str, Any]], blocks)
-            block_md: list[str] = []
-            for block in blocks:
-                rendered = block_to_markdown(block)
-                if rendered:
-                    block_md.append(rendered)
-            if block_md:
-                page_markdown.append("\n".join(block_md))
-        return "\n---\n\n".join(page_markdown)
+            if isinstance(page, dict) and isinstance(page.get("data"), list):
+                page_md = "\n".join(
+                    m for m in [block_to_markdown(b) for b in page["data"]] if m
+                )
+                if page_md:
+                    markdowns.append(page_md)
+        return "\n---\n\n".join(markdowns)
 
     def collect(self) -> "Pages":
         from .models import Page, Pages
@@ -110,7 +99,6 @@ class ConversionResult:
 
     def __iter__(self) -> Iterator["Page"]:
         import ijson
-
         from .models import Page
 
         with open(self.path, encoding="utf-8") as f:
@@ -131,23 +119,20 @@ def to_json(
     pdf = Path(pdf_path).resolve()
     if not pdf.exists():
         raise FileNotFoundError(f"pdf not found: {pdf}")
-
     out = Path(output).resolve() if output else pdf.with_suffix(".json")
     out.parent.mkdir(parents=True, exist_ok=True)
     log.info("extracting %s -> %s", pdf, out)
-
     with _redirect_c_output() as cap:
         rc = _lib(lib_path).pdf_to_json(str(pdf).encode(), str(out).encode())
-
     if rc != 0:
         try:
             with open(cap) as f:
-                if msg := f.read().strip():
+                msg = f.read().strip()
+                if msg:
                     log.error("c output:\n%s", msg)
         except OSError:
             pass
         raise ExtractionError(f"extraction failed (code {rc})")
-
     log.info("done")
     return ConversionResult(out)
 

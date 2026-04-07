@@ -18,13 +18,14 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "ruff",
+    "typer",
     "build",
 ]
 
 [project.urls]
-Homepage = "https://github.com/intercepted16/pymupdf4llm-C"
-Repository = "https://github.com/intercepted16/pymupdf4llm-C"
-Issues = "https://github.com/intercepted16/pymupdf4llm-C/issues"
+Homepage = "https://github.com/intercepted16/fibrumpdf"
+Repository = "https://github.com/intercepted16/fibrumpdf"
+Issues = "https://github.com/intercepted16/fibrumpdf/issues"
 
 [project.scripts]
 fibrum-pdf = "fibrum_pdf.main:main"
