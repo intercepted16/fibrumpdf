@@ -1,4 +1,7 @@
 line-length = 88
+include = ["*.py"]
+extend-exclude = ["mupdf/*.py"]
+
 [lint]
 select = ["E", "F", "W", "C", "D", "N", "T", "B"]
 mccabe.max-complexity = 8
