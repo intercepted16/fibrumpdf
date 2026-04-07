@@ -21,20 +21,30 @@ logging.getLogger(__name__).addHandler(logging.NullHandler())
 
 
 def __getattr__(name: str) -> Any:
-    if name in {"to_json", "ExtractionError", "ConversionResult"}:
-        from .api import ConversionResult, ExtractionError, to_json
+    if name == "to_json":
+        from .api import to_json
 
-        mapping = {
-            "to_json": to_json,
-            "ExtractionError": ExtractionError,
-            "ConversionResult": ConversionResult,
-        }
-        return mapping[name]
-    if name in {"Block", "Page", "Pages"}:
-        from .models import Block, Page, Pages
+        return to_json
+    if name == "ExtractionError":
+        from .api import ExtractionError
 
-        mapping = {"Block": Block, "Page": Page, "Pages": Pages}
-        return mapping[name]
+        return ExtractionError
+    if name == "ConversionResult":
+        from .api import ConversionResult
+
+        return ConversionResult
+    if name == "Block":
+        from .models import Block
+
+        return Block
+    if name == "Page":
+        from .models import Page
+
+        return Page
+    if name == "Pages":
+        from .models import Pages
+
+        return Pages
     raise AttributeError(name)
 
 
