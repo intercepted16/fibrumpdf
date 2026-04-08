@@ -5,6 +5,8 @@ package main
 */
 import "C"
 import (
+	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -15,14 +17,21 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unsafe"
 
-	"github.com/fibrumpdf/go/internal/bridge"
 	"github.com/fibrumpdf/go/internal/extractor"
 	"github.com/fibrumpdf/go/internal/logger"
+	rawdata "github.com/fibrumpdf/go/internal/raw"
 )
 
 var Logger = logger.GetLogger("tomd")
+
+var bufferPool = sync.Pool{
+	New: func() any {
+		b := new(bytes.Buffer)
+		b.Grow(4096)
+		return b
+	},
+}
 
 //export pdf_to_json
 func pdf_to_json(pdf_path *C.char, output_file *C.char) C.int {
@@ -34,17 +43,18 @@ func pdf_to_json(pdf_path *C.char, output_file *C.char) C.int {
 	return -1
 }
 
-func processPage(pageFile string) ([]byte, error) {
-	rawData, err := bridge.ReadRawPage(pageFile)
-	if err != nil {
-		return nil, err
-	}
+func readRawPageData(pageFile string) (*rawdata.PageData, error) {
+	return rawdata.ReadRawPage(pageFile)
+}
+
+func processRawPage(rawData *rawdata.PageData, buf *bytes.Buffer) error {
 	page := extractor.ExtractPageFromRaw(rawData)
-	pageJSON, err := json.Marshal(page)
-	if err != nil {
-		return nil, err
+	buf.Reset()
+	encoder := json.NewEncoder(buf)
+	if err := encoder.Encode(page); err != nil {
+		return err
 	}
-	return pageJSON, nil
+	return nil
 }
 
 func pdfToJson(pdfPath, outputPath string) error {
@@ -91,13 +101,70 @@ func pdfToJson(pdfPath, outputPath string) error {
 		results = make([]pageResult, len(pageFiles))
 		for i, pageFile := range pageFiles {
 			pageNum := extractPageNum(pageFile)
-			pageJSON, err := processPage(pageFile)
-			results[i] = pageResult{pageNum: pageNum, json: pageJSON, err: err}
+			rawData, err := readRawPageData(pageFile)
+			if err != nil {
+				Logger.Error("processing error", "err", err)
+				return err
+			}
+			buf := bufferPool.Get().(*bytes.Buffer)
+			buf.Reset()
+			err = processRawPage(rawData, buf)
+			if err != nil {
+				bufferPool.Put(buf)
+				Logger.Error("processing error", "err", err)
+				return err
+			}
+			result := buf.Bytes()
+			if len(result) > 0 && result[len(result)-1] == '\n' {
+				result = result[:len(result)-1]
+			}
+			pageJSON := append([]byte(nil), result...)
+			buf.Reset()
+			bufferPool.Put(buf)
+			if err := writePage(pageJSON, pageNum); err != nil {
+				Logger.Error("write error", "err", err)
+				return err
+			}
 		}
 	} else {
 		var wg sync.WaitGroup
 		pageChan := make(chan int, numWorkers)
-		results = make([]pageResult, len(pageFiles))
+		resultChan := make(chan pageResult, numWorkers)
+
+		for i := 0; i < numWorkers; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for idx := range pageChan {
+					pageFile := pageFiles[idx]
+					pageNum := extractPageNum(pageFile)
+					rawData, err := readRawPageData(pageFile)
+					if err != nil {
+						resultChan <- pageResult{idx: idx, pageNum: pageNum, json: nil, err: err}
+						Logger.Debug("processed page", "page", pageNum, "err", err)
+						continue
+					}
+					buf := bufferPool.Get().(*bytes.Buffer)
+					buf.Reset()
+					err = processRawPage(rawData, buf)
+					if err != nil {
+						bufferPool.Put(buf)
+						resultChan <- pageResult{idx: idx, pageNum: pageNum, json: nil, err: err}
+						Logger.Debug("processed page", "page", pageNum, "err", err)
+						continue
+					}
+					result := buf.Bytes()
+					if len(result) > 0 && result[len(result)-1] == '\n' {
+						result = result[:len(result)-1]
+					}
+					output := append([]byte(nil), result...)
+					buf.Reset()
+					bufferPool.Put(buf)
+					resultChan <- pageResult{idx: idx, pageNum: pageNum, json: output, err: nil}
+					Logger.Debug("processed page", "page", pageNum)
+				}
+			}()
+		}
 
 	for i := 0; i < numWorkers; i++ {
 		wg.Add(1)
