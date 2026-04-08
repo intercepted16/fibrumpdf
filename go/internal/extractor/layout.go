@@ -3,9 +3,9 @@ package extractor
 import (
 	"sort"
 
-	"github.com/pymupdf4llm-c/go/internal/column"
-	"github.com/pymupdf4llm-c/go/internal/geometry"
-	"github.com/pymupdf4llm-c/go/internal/models"
+	"github.com/fibrumpdf/go/internal/column"
+	"github.com/fibrumpdf/go/internal/geometry"
+	"github.com/fibrumpdf/go/internal/models"
 )
 
 type layoutBlock struct {

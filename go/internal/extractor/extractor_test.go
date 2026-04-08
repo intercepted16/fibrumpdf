@@ -6,10 +6,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pymupdf4llm-c/go/internal/extractor"
-	"github.com/pymupdf4llm-c/go/internal/models"
-	"github.com/pymupdf4llm-c/go/internal/raw"
-	"github.com/pymupdf4llm-c/go/internal/testutil"
+	"github.com/fibrumpdf/go/internal/extractor"
+	"github.com/fibrumpdf/go/internal/models"
+	"github.com/fibrumpdf/go/internal/raw"
+	"github.com/fibrumpdf/go/internal/testutil"
 )
 
 func extractTestPDF(t *testing.T, pdfName string) []models.Page {

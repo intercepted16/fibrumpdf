@@ -5,8 +5,8 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/pymupdf4llm-c/go/internal/geometry"
-	rawdata "github.com/pymupdf4llm-c/go/internal/raw"
+	"github.com/fibrumpdf/go/internal/geometry"
+	rawdata "github.com/fibrumpdf/go/internal/raw"
 )
 
 // AssembleOptions controls how text is assembled from ordered chars.

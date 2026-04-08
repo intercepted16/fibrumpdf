@@ -4,8 +4,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/pymupdf4llm-c/go/internal/geometry"
-	"github.com/pymupdf4llm-c/go/internal/models"
+	"github.com/fibrumpdf/go/internal/geometry"
+	"github.com/fibrumpdf/go/internal/models"
 )
 
 type classifiedBlock struct {

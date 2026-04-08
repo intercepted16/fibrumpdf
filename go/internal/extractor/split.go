@@ -4,9 +4,9 @@ import (
 	"math"
 	"strings"
 
-	"github.com/pymupdf4llm-c/go/internal/models"
-	"github.com/pymupdf4llm-c/go/internal/raw"
-	"github.com/pymupdf4llm-c/go/internal/textutil"
+	"github.com/fibrumpdf/go/internal/models"
+	"github.com/fibrumpdf/go/internal/raw"
+	"github.com/fibrumpdf/go/internal/textutil"
 )
 
 type splitBlock struct {

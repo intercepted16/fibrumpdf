@@ -4,7 +4,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/pymupdf4llm-c/go/internal/geometry"
+	"github.com/fibrumpdf/go/internal/geometry"
 )
 
 type GridNormalizeOptions struct {

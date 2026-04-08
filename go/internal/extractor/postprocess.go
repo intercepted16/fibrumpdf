@@ -6,9 +6,9 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/pymupdf4llm-c/go/internal/column"
-	"github.com/pymupdf4llm-c/go/internal/models"
-	"github.com/pymupdf4llm-c/go/internal/textutil"
+	"github.com/fibrumpdf/go/internal/column"
+	"github.com/fibrumpdf/go/internal/models"
+	"github.com/fibrumpdf/go/internal/textutil"
 )
 
 type postProcessStage struct{}

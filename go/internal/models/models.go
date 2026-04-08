@@ -1,11 +1,8 @@
 package models
 
 import (
-	"bytes"
 	"encoding/json"
-	"strconv"
-
-	"github.com/pymupdf4llm-c/go/internal/geometry"
+	"github.com/fibrumpdf/go/internal/geometry"
 )
 
 type BBox [4]float32
@@ -26,14 +23,6 @@ func (b BBox) Union(other BBox) BBox {
 		return b
 	}
 	return BBox{geometry.Min32(b[0], other[0]), geometry.Min32(b[1], other[1]), geometry.Max32(b[2], other[2]), geometry.Max32(b[3], other[3])}
-}
-
-func (b BBox) MarshalJSON() ([]byte, error) {
-	return []byte("[" +
-		strconv.FormatFloat(float64(b[0]), 'f', 2, 32) + "," +
-		strconv.FormatFloat(float64(b[1]), 'f', 2, 32) + "," +
-		strconv.FormatFloat(float64(b[2]), 'f', 2, 32) + "," +
-		strconv.FormatFloat(float64(b[3]), 'f', 2, 32) + "]"), nil
 }
 
 type BlockType string
@@ -93,15 +82,6 @@ type ListItem struct {
 	Prefix   string
 }
 
-type ListType string
-
-const (
-	ListTypeBulleted ListType = "bulleted"
-	ListTypeNumbered ListType = "numbered"
-)
-
-func (t ListType) String() string { return string(t) }
-
 func (li ListItem) MarshalJSON() ([]byte, error) {
 	lt, ind, pre := any(false), any(false), any(false)
 	if li.ListType != "" {
@@ -121,6 +101,15 @@ func (li ListItem) MarshalJSON() ([]byte, error) {
 	}{li.Spans, lt, ind, pre})
 }
 
+type ListType string
+
+const (
+	ListTypeBulleted ListType = "bulleted"
+	ListTypeNumbered ListType = "numbered"
+)
+
+func (t ListType) String() string { return string(t) }
+
 type TableCell struct {
 	BBox  BBox   `json:"bbox"`
 	Spans []Span `json:"spans,omitempty"`
@@ -132,82 +121,18 @@ type TableRow struct {
 }
 
 type Block struct {
-	Type                          BlockType
-	BBox                          BBox
-	Length                        int
-	FontSize                      float32    // all blocks except tables
-	Lines                         int        // for all blocks except tables
-	Level                         int        // for headings
-	Spans                         []Span     // this is for BlockText and BlockHeading
-	Items                         []ListItem // this is for BlockList
-	RowCount, ColCount, CellCount int        // table
-	Rows                          []TableRow //  this is for BlockTable
-}
-
-func (b Block) MarshalJSON() ([]byte, error) {
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false) // for <br>
-	switch b.Type {
-	case BlockText, BlockCode:
-		if err := enc.Encode(struct {
-			Type     BlockType `json:"type"`
-			BBox     BBox      `json:"bbox"`
-			Length   int       `json:"length"`
-			Spans    []Span    `json:"spans,omitempty"`
-			FontSize float32   `json:"font_size"`
-			Lines    int       `json:"lines"`
-		}{b.Type, b.BBox, b.Length, b.Spans, b.FontSize, b.Lines}); err != nil {
-			return nil, err
-		}
-	case BlockHeading:
-		if err := enc.Encode(struct {
-			Type     BlockType `json:"type"`
-			BBox     BBox      `json:"bbox"`
-			Length   int       `json:"length"`
-			Spans    []Span    `json:"spans,omitempty"`
-			FontSize float32   `json:"font_size"`
-			Level    int       `json:"level,omitempty"`
-		}{b.Type, b.BBox, b.Length, b.Spans, b.FontSize, b.Level}); err != nil {
-			return nil, err
-		}
-	case BlockList:
-		if err := enc.Encode(struct {
-			Type     BlockType  `json:"type"`
-			BBox     BBox       `json:"bbox"`
-			Length   int        `json:"length"`
-			Spans    []Span     `json:"spans,omitempty"`
-			FontSize float32    `json:"font_size"`
-			Items    []ListItem `json:"items,omitempty"`
-		}{b.Type, b.BBox, b.Length, b.Spans, b.FontSize, b.Items}); err != nil {
-			return nil, err
-		}
-	case BlockTable:
-		if err := enc.Encode(struct {
-			Type      BlockType  `json:"type"`
-			BBox      BBox       `json:"bbox"`
-			Length    int        `json:"length"`
-			Spans     []Span     `json:"spans,omitempty"`
-			FontSize  float32    `json:"font_size"`
-			RowCount  int        `json:"row_count,omitempty"`
-			ColCount  int        `json:"col_count,omitempty"`
-			CellCount int        `json:"cell_count,omitempty"`
-			Rows      []TableRow `json:"rows,omitempty"`
-		}{b.Type, b.BBox, b.Length, b.Spans, b.FontSize, b.RowCount, b.ColCount, b.CellCount, b.Rows}); err != nil {
-			return nil, err
-		}
-	default:
-		if err := enc.Encode(struct {
-			Type     BlockType `json:"type"`
-			BBox     BBox      `json:"bbox"`
-			Length   int       `json:"length"`
-			Spans    []Span    `json:"spans,omitempty"`
-			FontSize float32   `json:"font_size"`
-		}{b.Type, b.BBox, b.Length, b.Spans, b.FontSize}); err != nil {
-			return nil, err
-		}
-	}
-	return bytes.TrimSpace(buf.Bytes()), nil
+	Type      BlockType  `json:"type"`
+	BBox      BBox       `json:"bbox"`
+	Length    int        `json:"length"`
+	FontSize  float32    `json:"font_size"`
+	Lines     int        `json:"lines,omitempty"`
+	Level     int        `json:"level,omitempty"`
+	Spans     []Span     `json:"spans,omitempty"`
+	Items     []ListItem `json:"items,omitempty"`
+	RowCount  int        `json:"row_count,omitempty"`
+	ColCount  int        `json:"col_count,omitempty"`
+	CellCount int        `json:"cell_count,omitempty"`
+	Rows      []TableRow `json:"rows,omitempty"`
 }
 
 type Page struct {

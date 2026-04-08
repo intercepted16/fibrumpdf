@@ -5,10 +5,10 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/pymupdf4llm-c/go/internal/geometry"
-	"github.com/pymupdf4llm-c/go/internal/models"
-	rawdata "github.com/pymupdf4llm-c/go/internal/raw"
-	"github.com/pymupdf4llm-c/go/internal/textutil"
+	"github.com/fibrumpdf/go/internal/geometry"
+	"github.com/fibrumpdf/go/internal/models"
+	rawdata "github.com/fibrumpdf/go/internal/raw"
+	"github.com/fibrumpdf/go/internal/textutil"
 )
 
 type fontStats struct {

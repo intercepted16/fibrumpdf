@@ -1,9 +1,9 @@
 package extractor
 
 import (
-	"github.com/pymupdf4llm-c/go/internal/geometry"
-	"github.com/pymupdf4llm-c/go/internal/models"
-	"github.com/pymupdf4llm-c/go/internal/table"
+	"github.com/fibrumpdf/go/internal/geometry"
+	"github.com/fibrumpdf/go/internal/models"
+	"github.com/fibrumpdf/go/internal/table"
 )
 
 type tableStage struct{}

@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pymupdf4llm-c/go/internal/raw"
-	"github.com/pymupdf4llm-c/go/internal/table"
-	"github.com/pymupdf4llm-c/go/internal/testutil"
+	"github.com/fibrumpdf/go/internal/raw"
+	"github.com/fibrumpdf/go/internal/table"
+	"github.com/fibrumpdf/go/internal/testutil"
 )
 
 func loadTestPDFPages(t *testing.T, pdfName string) []*raw.PageData {

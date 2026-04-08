@@ -1,9 +1,9 @@
 package extractor
 
 import (
-	"github.com/pymupdf4llm-c/go/internal/logger"
-	"github.com/pymupdf4llm-c/go/internal/models"
-	rawdata "github.com/pymupdf4llm-c/go/internal/raw"
+	"github.com/fibrumpdf/go/internal/logger"
+	"github.com/fibrumpdf/go/internal/models"
+	rawdata "github.com/fibrumpdf/go/internal/raw"
 )
 
 var Logger = logger.GetLogger("extractor")

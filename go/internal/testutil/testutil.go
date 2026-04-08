@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/pymupdf4llm-c/go/internal/raw"
+	"github.com/fibrumpdf/go/internal/raw"
 )
 
 var TestDataDir string

@@ -5,9 +5,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/pymupdf4llm-c/go/internal/logger"
-	"github.com/pymupdf4llm-c/go/internal/raw"
-	"github.com/pymupdf4llm-c/go/internal/testutil"
+	"github.com/fibrumpdf/go/internal/logger"
+	"github.com/fibrumpdf/go/internal/raw"
+	"github.com/fibrumpdf/go/internal/testutil"
 )
 
 var Logger = logger.GetLogger("rawTest")
