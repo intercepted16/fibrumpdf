@@ -2,7 +2,6 @@ package extractor
 
 import (
 	"strings"
-	"unicode/utf8"
 
 	"github.com/fibrumpdf/go/internal/geometry"
 	"github.com/fibrumpdf/go/internal/models"
@@ -24,11 +23,9 @@ type classifyStage struct{}
 func (s classifyStage) Run(ctx parseOutput, blocks []splitBlock) []classifiedBlock {
 	out := make([]classifiedBlock, 0, len(blocks))
 	for _, b := range blocks {
-		avg := b.fontSizeSum / float32(b.charCount)
-		textChars := utf8.RuneCountInString(b.text)
 		boldRatio := float32(b.boldCount) / float32(b.charCount)
 		monoRatio := float32(b.monoCount) / float32(b.charCount)
-		typ, level := s.classifyTextBlock(b.text, textChars, b.lineCount, avg, boldRatio, b.isList, ctx.medianFontSize, ctx.cfg)
+		typ, level := s.classifyTextBlock(b.text, b.runeCount, b.lineCount, b.avgFontSize, boldRatio, b.isList, ctx.medianFontSize, ctx.cfg)
 		if monoRatio >= 0.8 && typ == models.BlockText && b.lineCount >= 2 {
 			typ = models.BlockCode
 		}
@@ -42,8 +39,8 @@ func (s classifyStage) Run(ctx parseOutput, blocks []splitBlock) []classifiedBlo
 			text:         b.text,
 			bbox:         b.bbox,
 			lineCount:    b.lineCount,
-			avgFontSize:  avg,
-			textChars:    textChars,
+			avgFontSize:  b.avgFontSize,
+			textChars:    b.runeCount,
 			typ:          typ,
 			headingLevel: level,
 			spans:        spans,

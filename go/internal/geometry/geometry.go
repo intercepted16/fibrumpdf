@@ -1,7 +1,5 @@
 package geometry
 
-import "math"
-
 type Point struct{ X, Y float32 }
 
 type Rect struct{ X0, Y0, X1, Y1 float32 }
@@ -66,8 +64,10 @@ func Max32(a, b float32) float32 {
 }
 
 func Abs32(x float32) float32 {
-	// one could argue this is an unnecessary microoptimization, but, it's called millions of times
-	return math.Float32frombits(math.Float32bits(x) & 0x7FFFFFFF) // clear the sign bit
+	if x < 0 {
+		return -x
+	}
+	return x
 }
 
 func Clamp(x, lo, hi int) int {

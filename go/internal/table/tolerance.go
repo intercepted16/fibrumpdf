@@ -102,11 +102,6 @@ func (c *Cluster1D) MergeSorted(values []float32) []float32 {
 	return result
 }
 
-// IsNearby checks if two values are within the provided tolerance.
-func IsNearby(a, b, tol float32) bool {
-	return geometry.Abs32(a-b) < tol
-}
-
 // ComputeRowYTolerance computes row Y tolerance with optional multiplier
 func ComputeRowYTolerance(baseTol, multiplier float32) float32 {
 	return baseTol * multiplier
@@ -130,9 +125,4 @@ func ComputeRowClusterTolerance(pageHeight, charDensity float32, cfg ToleranceCo
 // ComputeWordGap computes the gap used to separate words on a line.
 func ComputeWordGap(avgCharWidth float32, cfg ToleranceConfig) float32 {
 	return geometry.Max32(avgCharWidth*cfg.WordGapMultiplier, cfg.WordGapMin)
-}
-
-// ComputeRowSpacingTolerance computes row spacing tolerance from median gap
-func ComputeRowSpacingTolerance(medianGap float32) float32 {
-	return geometry.Max32(1.5, medianGap*0.45)
 }

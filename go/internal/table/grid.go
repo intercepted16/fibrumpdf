@@ -123,14 +123,14 @@ func (g *Grid) normalizeRowWidths() {
 	colCount := len(g.Table.Rows[0].Cells)
 	for r := 1; r < len(g.Table.Rows); r++ {
 		row := &g.Table.Rows[r]
-		if len(row.Cells) > colCount {
-			row.Cells = row.Cells[:colCount]
-			continue
-		}
-		if len(row.Cells) < colCount {
-			padded := make([]Cell, colCount)
-			copy(padded, row.Cells)
-			row.Cells = padded
+		if len(row.Cells) != colCount {
+			if len(row.Cells) > colCount {
+				row.Cells = row.Cells[:colCount]
+			} else {
+				padded := make([]Cell, colCount)
+				copy(padded, row.Cells)
+				row.Cells = padded
+			}
 		}
 	}
 }

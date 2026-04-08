@@ -11,13 +11,13 @@ import (
 var TestDataDir string
 
 func init() {
-	root := FindProjectRoot()
+	root := findProjectRoot()
 	if root != "" {
 		TestDataDir = filepath.Join(root, "test_data", "pdfs")
 	}
 }
 
-func FindProjectRoot() string {
+func findProjectRoot() string {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return ""

@@ -415,55 +415,51 @@ func blTableFillRatio(t Table) float32 {
 	return float32(pop) / float32(tot)
 }
 
-func columnForX(x float32, colPositions []float32, pageRect geometry.Rect) int {
-	for i, pos := range colPositions {
-		left := pageRect.X0
-		if i > 0 {
-			left = (colPositions[i-1] + pos) * 0.5
-		}
-		right := pageRect.X1
-		if i < len(colPositions)-1 {
-			right = (pos + colPositions[i+1]) * 0.5
-		}
-		if x >= left && x < right {
-			return i
-		}
-	}
-	return -1
-}
-
 func columnForRange(x0, x1 float32, colPositions []float32, pageRect geometry.Rect) int {
 	if x1 < x0 {
 		x0, x1 = x1, x0
 	}
-	bestCol := -1
-	bestOverlap := float32(0)
+	bestCol, bestOverlap := -1, float32(0)
 	bestCenterDist := float32(1e9)
 	rangeCenter := (x0 + x1) * 0.5
 
 	for i, pos := range colPositions {
-		left := pageRect.X0
+		var left, right float32
 		if i > 0 {
 			left = (colPositions[i-1] + pos) * 0.5
+		} else {
+			left = pageRect.X0
 		}
-		right := pageRect.X1
 		if i < len(colPositions)-1 {
 			right = (pos + colPositions[i+1]) * 0.5
+		} else {
+			right = pageRect.X1
 		}
-		overlap := geometry.Min32(x1, right) - geometry.Max32(x0, left)
-		if overlap < 0 {
-			overlap = 0
-		}
-		center := (left + right) * 0.5
-		centerDist := geometry.Abs32(rangeCenter - center)
+		overlap := geometry.Max32(0, geometry.Min32(x1, right)-geometry.Max32(x0, left))
+		centerDist := geometry.Abs32(rangeCenter - (left+right)*0.5)
 		if overlap > bestOverlap || (overlap == bestOverlap && centerDist < bestCenterDist) {
-			bestOverlap = overlap
-			bestCenterDist = centerDist
-			bestCol = i
+			bestOverlap, bestCenterDist, bestCol = overlap, centerDist, i
 		}
 	}
 	if bestCol >= 0 {
 		return bestCol
 	}
-	return columnForX(rangeCenter, colPositions, pageRect)
+	// Fallback: find column for range center
+	for i, pos := range colPositions {
+		var left, right float32
+		if i > 0 {
+			left = (colPositions[i-1] + pos) * 0.5
+		} else {
+			left = pageRect.X0
+		}
+		if i < len(colPositions)-1 {
+			right = (pos + colPositions[i+1]) * 0.5
+		} else {
+			right = pageRect.X1
+		}
+		if rangeCenter >= left && rangeCenter < right {
+			return i
+		}
+	}
+	return -1
 }

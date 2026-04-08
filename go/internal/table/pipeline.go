@@ -54,14 +54,13 @@ func (p tableExtractionPipeline) run(raw *rawdata.PageData) []models.Block {
 	}
 	if len(selected.tables) == 0 {
 		borderlessDetected := p.detector.runBorderless(raw)
-		if len(borderlessDetected.tables) == 0 {
-			return nil
+		if len(borderlessDetected.tables) > 0 {
+			borderlessMaterialized := p.materializer.run(raw, borderlessDetected)
+			selected = p.selector.run(raw.PageRect(), raw, borderlessMaterialized)
 		}
-		borderlessMaterialized := p.materializer.run(raw, borderlessDetected)
-		selected = p.selector.run(raw.PageRect(), raw, borderlessMaterialized)
-		if len(selected.tables) == 0 {
-			return nil
-		}
+	}
+	if len(selected.tables) == 0 {
+		return nil
 	}
 	return p.converter.run(selected)
 }
@@ -209,7 +208,6 @@ func (s tableSelector) run(pageRect geometry.Rect, raw *rawdata.PageData, in mat
 		if !hasTableShape(tbl) || isTableOversized(tbl.BBox, pageRect) {
 			continue
 		}
-		// Skip content validation for now - too risky for recall
 		candidates = append(candidates, tbl)
 	}
 	if len(candidates) == 0 {
@@ -268,9 +266,6 @@ func (s tableConverter) run(in selectedTables) []models.Block {
 			if float32(rowsWithTwoPopulated)/float32(visibleRows) < 0.25 {
 				continue
 			}
-			if looksLikeCaptionContaminatedTable(rows, rowsWithTwoPopulated, visibleRows) {
-				continue
-			}
 		}
 
 		blocks = append(blocks, models.Block{
@@ -283,50 +278,6 @@ func (s tableConverter) run(in selectedTables) []models.Block {
 		})
 	}
 	return blocks
-}
-
-func looksLikeCaptionContaminatedTable(rows []models.TableRow, rowsWithTwoPopulated, visibleRows int) bool {
-	if len(rows) == 0 || visibleRows < 2 {
-		return false
-	}
-	if float32(rowsWithTwoPopulated)/float32(visibleRows) >= 0.60 {
-		return false
-	}
-	for i := 0; i < len(rows) && i < 2; i++ {
-		for _, cell := range rows[i].Cells {
-			if len(cell.Spans) == 0 {
-				continue
-			}
-			if looksLikeTableCaption(cell.Spans[0].Text) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func looksLikeTableCaption(text string) bool {
-	t := strings.ToLower(strings.TrimSpace(text))
-	if t == "" {
-		return false
-	}
-	hasDigit := false
-	for _, r := range t {
-		if r >= '0' && r <= '9' {
-			hasDigit = true
-			break
-		}
-	}
-	if !hasDigit {
-		return false
-	}
-	keywords := []string{"table", "tabla", "tabela", "tabelle", "tabella", "tablo", "таблица"}
-	for _, kw := range keywords {
-		if strings.HasPrefix(t, kw+" ") || strings.HasPrefix(t, kw+".") || strings.HasPrefix(t, kw+":") {
-			return true
-		}
-	}
-	return false
 }
 
 func hasTableShape(tbl Table) bool {
@@ -412,11 +363,16 @@ func charsNearRect(chars []rawdata.Char, rect geometry.Rect) []rawdata.Char {
 
 func shrinkCellToContent(cell geometry.Rect, chars []rawdata.Char) geometry.Rect {
 	x0, y0, x1, y1 := cell.X0-2, cell.Y0-2, cell.X1+2, cell.Y1+2
-	content := geometry.Empty
+	var content geometry.Rect
 	for i := range chars {
 		ch := &chars[i]
 		if ch.BBox.X0 < x1 && ch.BBox.X1 > x0 && ch.BBox.Y0 < y1 && ch.BBox.Y1 > y0 {
-			content = content.Union(geometry.Rect{X0: ch.BBox.X0, Y0: ch.BBox.Y0, X1: ch.BBox.X1, Y1: ch.BBox.Y1})
+			r := geometry.Rect{X0: ch.BBox.X0, Y0: ch.BBox.Y0, X1: ch.BBox.X1, Y1: ch.BBox.Y1}
+			if content.IsEmpty() {
+				content = r
+			} else {
+				content = content.Union(r)
+			}
 		}
 	}
 	if content.IsEmpty() {
@@ -488,8 +444,7 @@ func extractTextInRectFromChars(chars []rawdata.Char, rect geometry.Rect, allowO
 	yMin, yMax := rect.Y0+0.1, rect.Y1-0.1
 	for i := range chars {
 		ch := chars[i]
-		cx := (ch.BBox.X0 + ch.BBox.X1) * 0.5
-		cy := (ch.BBox.Y0 + ch.BBox.Y1) * 0.5
+		cx, cy := (ch.BBox.X0+ch.BBox.X1)*0.5, (ch.BBox.Y0+ch.BBox.Y1)*0.5
 		if cx >= xMin && cx <= xMax && cy >= yMin && cy <= yMax {
 			selected = append(selected, ch)
 		}
@@ -505,14 +460,13 @@ func extractTextInRectFromChars(chars []rawdata.Char, rect geometry.Rect, allowO
 	if len(selected) == 0 {
 		return ""
 	}
-	indices := make([]int, len(selected))
-	for i := range selected {
-		indices[i] = i
+	sorter := charRectSorter{indices: make([]int, len(selected)), chars: selected}
+	for i := range sorter.indices {
+		sorter.indices[i] = i
 	}
-	sorter := charRectSorter{indices: indices, chars: selected}
 	sort.Stable(sorter)
-	ordered := make([]rawdata.Char, len(indices))
-	for i, idx := range indices {
+	ordered := make([]rawdata.Char, len(sorter.indices))
+	for i, idx := range sorter.indices {
 		ordered[i] = selected[idx]
 	}
 
@@ -545,16 +499,14 @@ func splitCharsIntoLines(chars []rawdata.Char) [][]rawdata.Char {
 	lines := make([][]rawdata.Char, 0, 4)
 	cur := make([]rawdata.Char, 0, 16)
 	lineY := float32(0)
-	hasLine := false
-	for _, ch := range chars {
-		cy := (ch.BBox.Y0 + ch.BBox.Y1) * 0.5
-		lineTol := geometry.Max32(ch.Size*0.7, 1.2)
-		if !hasLine {
+	for i, ch := range chars {
+		if i == 0 {
 			cur = append(cur, ch)
-			lineY = cy
-			hasLine = true
+			lineY = (ch.BBox.Y0 + ch.BBox.Y1) * 0.5
 			continue
 		}
+		cy := (ch.BBox.Y0 + ch.BBox.Y1) * 0.5
+		lineTol := geometry.Max32(ch.Size*0.7, 1.2)
 		if geometry.Abs32(cy-lineY) > lineTol {
 			sort.SliceStable(cur, func(i, j int) bool { return cur[i].BBox.X0 < cur[j].BBox.X0 })
 			lines = append(lines, cur)
@@ -685,7 +637,7 @@ func mergeContinuationRows(tbl *Table) {
 		}
 
 		currText := strings.TrimSpace(curr.Cells[currCol].Text)
-		if currText == "" || looksLikeTableCaption(currText) {
+		if currText == "" {
 			keep = append(keep, curr)
 			continue
 		}

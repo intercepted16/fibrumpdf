@@ -7,6 +7,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/fibrumpdf/go/internal/column"
+	"github.com/fibrumpdf/go/internal/geometry"
 	"github.com/fibrumpdf/go/internal/models"
 	"github.com/fibrumpdf/go/internal/textutil"
 )
@@ -57,7 +58,7 @@ func (s postProcessStage) Run(ctx parseOutput, blocks []layoutBlock, tables []mo
 		ordered = append(ordered, orderedBlock{bbox: tbl.BBox, colIdx: colIdx, block: tbl})
 	}
 	sort.SliceStable(ordered, func(i, j int) bool {
-		return ReadingOrderLess(ordered[i].bbox, ordered[j].bbox, ordered[i].colIdx, ordered[j].colIdx)
+		return readingOrderLess(ordered[i].bbox, ordered[j].bbox, ordered[i].colIdx, ordered[j].colIdx)
 	})
 	out := make([]models.Block, 0, len(ordered))
 	for _, b := range ordered {
@@ -92,7 +93,7 @@ func (s postProcessStage) assignTableColumns(tables []models.Block, bodyFontSize
 	}
 
 	// Run column detection
-	column.DetectAndAssignColumns(blockList, bodyFontSize, nil)
+	column.DetectAndAssignColumns(blockList, bodyFontSize)
 
 	// Extract assigned indices
 	for i := range tmpBlocks {
@@ -249,4 +250,20 @@ func (s postProcessStage) cleanSpans(spans []models.Span) []models.Span {
 		out = append(out, spans[i])
 	}
 	return out
+}
+
+func readingOrderLess(bi, bj models.BBox, colI, colJ int) bool {
+	if colI == colJ {
+		if geometry.Abs32(bi.Y0()-bj.Y0()) > 2.0 {
+			return bi.Y0() < bj.Y0()
+		}
+		return bi.X0() < bj.X0()
+	}
+	if colI == 0 || colJ == 0 {
+		if geometry.Abs32(bi.Y0()-bj.Y0()) > 2.0 {
+			return bi.Y0() < bj.Y0()
+		}
+		return colI == 0
+	}
+	return colI < colJ
 }

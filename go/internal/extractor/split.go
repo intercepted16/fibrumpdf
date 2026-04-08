@@ -3,6 +3,7 @@ package extractor
 import (
 	"math"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/fibrumpdf/go/internal/models"
 	"github.com/fibrumpdf/go/internal/raw"
@@ -20,6 +21,8 @@ type splitBlock struct {
 	monoCount   int
 	isList      bool
 	spans       []models.Span
+	avgFontSize float32
+	runeCount   int
 }
 
 type splitStage struct{}
@@ -94,6 +97,8 @@ func (s splitStage) splitRawBlock(ctx parseOutput, lineStart, lineCount int) []s
 		if len(spans) == 0 {
 			continue
 		}
+		avg := fontSizeSum / float32(totalChars)
+		runeCount := utf8.RuneCountInString(text)
 		result = append(result, splitBlock{
 			text:        text,
 			bbox:        subBBox,
@@ -105,6 +110,8 @@ func (s splitStage) splitRawBlock(ctx parseOutput, lineStart, lineCount int) []s
 			monoCount:   monoChars,
 			isList:      subBlockIsList,
 			spans:       spans,
+			avgFontSize: avg,
+			runeCount:   runeCount,
 		})
 	}
 	return result

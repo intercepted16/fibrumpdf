@@ -15,16 +15,14 @@ var Logger = logger.GetLogger("table")
 func cordToInt(x float64) int { return int(x*cordScale + 0.5) }
 
 func hasEdge(edges []Edge, x0, y0, x1, y1, eps float64) bool {
-	// For horizontal edges (y0 ≈ y1), we check X coverage
-	// For vertical edges (x0 ≈ x1), we check Y coverage
+
 	isHorizontal := math.Abs(y0-y1) < eps
 
 	if isHorizontal {
-		// Check if horizontal edges at this Y position cover the X span
+
 		targetY := (y0 + y1) / 2
 		spanStart, spanEnd := math.Min(x0, x1), math.Max(x0, x1)
 
-		// Collect all edges near this Y
 		var coveringEdges []struct{ x0, x1 float64 }
 		for _, e := range edges {
 			if e.Orientation == rawdata.EdgeHorizontal && math.Abs(e.Y0-targetY) < eps {
@@ -32,14 +30,12 @@ func hasEdge(edges []Edge, x0, y0, x1, y1, eps float64) bool {
 			}
 		}
 
-		// Check if the span is covered (allowing small gaps)
 		return spanIsCovered(coveringEdges, spanStart, spanEnd, eps)
 	} else {
-		// Check if vertical edges at this X position cover the Y span
+
 		targetX := (x0 + x1) / 2
 		spanStart, spanEnd := math.Min(y0, y1), math.Max(y0, y1)
 
-		// Collect all edges near this X
 		var coveringEdges []struct{ x0, x1 float64 }
 		for _, e := range edges {
 			if e.Orientation == rawdata.EdgeVertical && math.Abs(e.X0-targetX) < eps {
@@ -47,31 +43,26 @@ func hasEdge(edges []Edge, x0, y0, x1, y1, eps float64) bool {
 			}
 		}
 
-		// Check if the span is covered (allowing small gaps)
 		return spanIsCovered(coveringEdges, spanStart, spanEnd, eps)
 	}
 }
 
-// spanIsCovered checks if a set of segments collectively cover [spanStart, spanEnd]
-// allowing small gaps up to eps
 func spanIsCovered(segments []struct{ x0, x1 float64 }, spanStart, spanEnd, eps float64) bool {
 	if len(segments) == 0 {
 		return false
 	}
 
-	// Sort segments by start position
 	sort.Slice(segments, func(i, j int) bool { return segments[i].x0 < segments[j].x0 })
 
-	// Merge overlapping/adjacent segments and check coverage
 	mergedStart := segments[0].x0
 	mergedEnd := segments[0].x1
 	for i := 1; i < len(segments); i++ {
-		if segments[i].x0 <= mergedEnd+eps { // allow small gap
+		if segments[i].x0 <= mergedEnd+eps {
 			if segments[i].x1 > mergedEnd {
 				mergedEnd = segments[i].x1
 			}
 		} else {
-			// Gap too large, reset
+
 			if mergedStart-eps <= spanStart && mergedEnd+eps >= spanEnd {
 				return true
 			}
@@ -95,9 +86,6 @@ func findCells(pageRect geometry.Rect, hEdges, vEdges []Edge, avgEdgeSpacing flo
 		return nil
 	}
 
-	// Build grid-based cells directly from grid lines. This produces non-overlapping
-	// cells that align with the detected grid structure.
-
 	var cells []geometry.Rect
 	for ri := 0; ri < len(gridRows)-1; ri++ {
 		for ci := 0; ci < len(gridCols)-1; ci++ {
@@ -107,32 +95,22 @@ func findCells(pageRect geometry.Rect, hEdges, vEdges []Edge, avgEdgeSpacing flo
 			if !sizeOk {
 				continue
 			}
-			// Check edge support for this cell
-			topEdgeOk := hasEdge(hEdges, float64(cell.X0), float64(cell.Y0), float64(cell.X1), float64(cell.Y0), eps)
-			bottomEdgeOk := hasEdge(hEdges, float64(cell.X0), float64(cell.Y1), float64(cell.X1), float64(cell.Y1), eps)
-			leftEdgeOk := hasEdge(vEdges, float64(cell.X0), float64(cell.Y0), float64(cell.X0), float64(cell.Y1), eps)
-			rightEdgeOk := hasEdge(vEdges, float64(cell.X1), float64(cell.Y0), float64(cell.X1), float64(cell.Y1), eps)
+
+			edges := [4]bool{
+				hasEdge(hEdges, float64(cell.X0), float64(cell.Y0), float64(cell.X1), float64(cell.Y0), eps),
+				hasEdge(hEdges, float64(cell.X0), float64(cell.Y1), float64(cell.X1), float64(cell.Y1), eps),
+				hasEdge(vEdges, float64(cell.X0), float64(cell.Y0), float64(cell.X0), float64(cell.Y1), eps),
+				hasEdge(vEdges, float64(cell.X1), float64(cell.Y0), float64(cell.X1), float64(cell.Y1), eps),
+			}
 			edgeCount := 0
-			if topEdgeOk {
-				edgeCount++
+			for _, ok := range edges {
+				if ok {
+					edgeCount++
+				}
 			}
-			if bottomEdgeOk {
-				edgeCount++
-			}
-			if leftEdgeOk {
-				edgeCount++
-			}
-			if rightEdgeOk {
-				edgeCount++
-			}
-			// Accept cells with at least 2 edges OR cells with at least 1 edge in tables
-			// with good grid structure (many grid lines). Relaxed to accept more partial borders.
+
 			minEdges := 2
-			if len(gridCols) >= 4 && len(gridRows) >= 4 {
-				minEdges = 1 // Relaxed for well-structured grids
-			}
-			// Also accept cells with just 1 edge if grid is very regular (≥6 lines)
-			if len(gridCols) >= 6 || len(gridRows) >= 6 {
+			if (len(gridCols) >= 4 && len(gridRows) >= 4) || len(gridCols) >= 6 || len(gridRows) >= 6 {
 				minEdges = 1
 			}
 			if edgeCount >= minEdges {
@@ -141,8 +119,6 @@ func findCells(pageRect geometry.Rect, hEdges, vEdges []Edge, avgEdgeSpacing flo
 		}
 	}
 
-	// If we didn't find enough cells with edge support, fall back to all grid cells
-	// Relaxed threshold from 4 to 3 to be more aggressive with partial tables
 	if len(cells) < 3 && len(gridRows) >= 2 && len(gridCols) >= 2 {
 		cells = cells[:0]
 		for ri := 0; ri < len(gridRows)-1; ri++ {
@@ -410,9 +386,7 @@ func isSparseSeparatorRow(row Row, dominantCols int, tableWidth float32) bool {
 		return true
 	}
 	maxCols := dominantCols / 3
-	if maxCols < 1 {
-		maxCols = 1
-	}
+	maxCols = max(maxCols, 1)
 	if rowCols > maxCols {
 		return false
 	}

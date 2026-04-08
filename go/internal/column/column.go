@@ -17,9 +17,7 @@ type BlockWithColumn interface {
 	SetColumnIndex(idx int)
 }
 
-type LineBBox struct{ X0, X1 float32 }
-
-func DetectAndAssignColumns(blocks []BlockWithColumn, bodyFontSize float32, lineBoxes []LineBBox) {
+func DetectAndAssignColumns(blocks []BlockWithColumn, bodyFontSize float32) {
 	if len(blocks) == 0 {
 		return
 	}
@@ -29,7 +27,7 @@ func DetectAndAssignColumns(blocks []BlockWithColumn, bodyFontSize float32, line
 		assignAllToColumn(blocks, 0)
 		return
 	}
-	columns := detectColumns(blocks, lineBoxes, minX, maxX, pageWidth, bodyFontSize)
+	columns := detectColumns(blocks, minX, maxX, pageWidth, bodyFontSize)
 	if len(columns) <= 1 {
 		assignAllToColumn(blocks, 0)
 		return
@@ -37,42 +35,24 @@ func DetectAndAssignColumns(blocks []BlockWithColumn, bodyFontSize float32, line
 	assignBlocksToColumns(blocks, columns)
 }
 
-func detectColumns(blocks []BlockWithColumn, lineBoxes []LineBBox, minX, maxX, pageWidth, bodyFontSize float32) []columnRange {
+func detectColumns(blocks []BlockWithColumn, minX, maxX, pageWidth, bodyFontSize float32) []columnRange {
 	occupancy := make([]bool, pageWidthResolution)
 	threshold := pageWidth * 0.5
 	midX := (minX + maxX) * 0.5
 
-	if len(lineBoxes) > 0 {
-		for _, lb := range lineBoxes {
-			bw := lb.X1 - lb.X0
-			if bw > threshold || bw < 5 {
-				continue
-			}
-
-			if lb.X0 < midX && lb.X1 > midX {
-				continue
-			}
-			idx0 := geometry.Clamp(int((lb.X0-minX)/pageWidth*float32(pageWidthResolution-1)), 0, pageWidthResolution-1)
-			idx1 := geometry.Clamp(int((lb.X1-minX)/pageWidth*float32(pageWidthResolution-1)), 0, pageWidthResolution-1)
-			for k := idx0; k <= idx1; k++ {
-				occupancy[k] = true
-			}
+	for _, b := range blocks {
+		bbox := b.GetBBox()
+		if bw := bbox.Width(); bw > threshold || bw < 5 {
+			continue
 		}
-	} else {
-		for _, b := range blocks {
-			bbox := b.GetBBox()
-			if bw := bbox.Width(); bw > threshold || bw < 5 {
-				continue
-			}
 
-			if bbox.X0() < midX && bbox.X1() > midX {
-				continue
-			}
-			idx0 := geometry.Clamp(int((bbox.X0()-minX)/pageWidth*float32(pageWidthResolution-1)), 0, pageWidthResolution-1)
-			idx1 := geometry.Clamp(int((bbox.X1()-minX)/pageWidth*float32(pageWidthResolution-1)), 0, pageWidthResolution-1)
-			for k := idx0; k <= idx1; k++ {
-				occupancy[k] = true
-			}
+		if bbox.X0() < midX && bbox.X1() > midX {
+			continue
+		}
+		idx0 := geometry.Clamp(int((bbox.X0()-minX)/pageWidth*float32(pageWidthResolution-1)), 0, pageWidthResolution-1)
+		idx1 := geometry.Clamp(int((bbox.X1()-minX)/pageWidth*float32(pageWidthResolution-1)), 0, pageWidthResolution-1)
+		for k := idx0; k <= idx1; k++ {
+			occupancy[k] = true
 		}
 	}
 
