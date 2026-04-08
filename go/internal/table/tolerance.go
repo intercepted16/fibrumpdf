@@ -1,6 +1,6 @@
 package table
 
-import "github.com/pymupdf4llm-c/go/internal/geometry"
+import "github.com/fibrumpdf/go/internal/geometry"
 
 // ToleranceConfig centralizes all proximity and tolerance checks
 type ToleranceConfig struct {
@@ -36,9 +36,9 @@ func NewDefaultToleranceConfig() ToleranceConfig {
 		RowClusterMin:            3.0,
 		WordGapMultiplier:        1.6,
 		WordGapMin:               6.0,
-		ColumnMergeMultiplier:    7.0,
+		ColumnMergeMultiplier:    3.8,
 		ColumnMergeGrowthFactor:  1.35,
-		MaxColumnCount:           10,
+		MaxColumnCount:           16,
 	}
 }
 
@@ -53,17 +53,34 @@ type Cluster1D struct {
 func NewCluster1D(tol float32) *Cluster1D {
 	return &Cluster1D{Tol: tol}
 }
-
-// Add inserts a value and returns the cluster index.
 func (c *Cluster1D) Add(value float32) int {
-	for i := range c.Centers {
-		if geometry.Abs32(value-c.Centers[i]) <= c.Tol {
-			count := c.Counts[i] + 1
-			c.Centers[i] = (c.Centers[i]*float32(c.Counts[i]) + value) / float32(count)
-			c.Counts[i] = count
+	lastIdx := len(c.Centers) - 1
+
+	if lastIdx >= 0 {
+		diff := value - c.Centers[lastIdx]
+
+		if (diff >= 0 && diff <= c.Tol) || (diff < 0 && -diff <= c.Tol) {
+			oldCount := c.Counts[lastIdx]
+			newCount := oldCount + 1
+			c.Counts[lastIdx] = newCount
+
+			invCount := 1.0 / float32(newCount)
+			c.Centers[lastIdx] = (c.Centers[lastIdx]*float32(oldCount) + value) * invCount
+			return lastIdx
+		}
+	}
+
+	for i := lastIdx - 1; i >= 0; i-- {
+		diff := value - c.Centers[i]
+		if (diff >= 0 && diff <= c.Tol) || (diff < 0 && -diff <= c.Tol) {
+			oldCount := c.Counts[i]
+			newCount := oldCount + 1
+			c.Counts[i] = newCount
+			c.Centers[i] = (c.Centers[i]*float32(oldCount) + value) / float32(newCount)
 			return i
 		}
 	}
+
 	c.Centers = append(c.Centers, value)
 	c.Counts = append(c.Counts, 1)
 	return len(c.Centers) - 1

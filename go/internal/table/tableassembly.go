@@ -5,7 +5,7 @@ import (
 	"slices"
 	"sort"
 
-	"github.com/pymupdf4llm-c/go/internal/geometry"
+	"github.com/fibrumpdf/go/internal/geometry"
 )
 
 // AssemblyConfig contains configuration for table assembly.

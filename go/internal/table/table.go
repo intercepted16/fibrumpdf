@@ -5,9 +5,9 @@ import (
 	"slices"
 	"sort"
 
-	"github.com/pymupdf4llm-c/go/internal/geometry"
-	"github.com/pymupdf4llm-c/go/internal/logger"
-	rawdata "github.com/pymupdf4llm-c/go/internal/raw"
+	"github.com/fibrumpdf/go/internal/geometry"
+	"github.com/fibrumpdf/go/internal/logger"
+	rawdata "github.com/fibrumpdf/go/internal/raw"
 )
 
 var Logger = logger.GetLogger("table")
@@ -259,7 +259,7 @@ func groupCellsIntoTables(cells []geometry.Rect, pageRect geometry.Rect) *TableA
 }
 
 func adaptiveRowGroupingTolerance(avgH float32, pageRect geometry.Rect) float32 {
-	base := geometry.Max32(avgH*0.45, pageRect.Height()*0.004)
+	base := geometry.Max32(avgH*0.35, pageRect.Height()*0.004)
 	minTol := pageRect.Height() * 0.0025
 	maxTol := pageRect.Height() * rowYTolRatio
 	if base < minTol {
@@ -569,9 +569,10 @@ func detectTables(bridgeEdges []rawdata.Edge, pageRect geometry.Rect, pageNum in
 	}
 	var hEdges, vEdges []Edge
 	for _, e := range bridgeEdges {
-		if e.Orientation == rawdata.EdgeHorizontal {
+		switch e.Orientation {
+		case rawdata.EdgeHorizontal:
 			hEdges = append(hEdges, e)
-		} else if e.Orientation == rawdata.EdgeVertical {
+		case rawdata.EdgeVertical:
 			vEdges = append(vEdges, e)
 		}
 	}
@@ -610,5 +611,12 @@ func detectTables(bridgeEdges []rawdata.Edge, pageRect geometry.Rect, pageNum in
 	}
 	valid = deduplicateCells(valid)
 	Logger.Debug("deduplicated cells", "page", pageNum, "validCells", len(valid))
-	return groupCellsIntoTables(valid, pageRect)
+	tables := groupCellsIntoTables(valid, pageRect)
+	if tables == nil {
+		return nil
+	}
+	for i := range tables.Tables {
+		tables.Tables[i].RuledTable = true
+	}
+	return tables
 }
