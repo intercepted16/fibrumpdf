@@ -8,15 +8,18 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/pprof"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unsafe"
 
 	"github.com/fibrumpdf/go/internal/extractor"
 	"github.com/fibrumpdf/go/internal/logger"
@@ -91,38 +94,98 @@ func pdfToJson(pdfPath, outputPath string) error {
 		json    []byte
 		err     error
 	}
-	numWorkers := runtime.NumCPU()
-	if numWorkers > len(pageFiles) {
-		numWorkers = len(pageFiles)
+
+	type rawPageData struct {
+		idx     int
+		pageNum int
+		data    *rawdata.PageData
+		err     error
 	}
-	targetWorkers := (len(pageFiles) + 2) / 3
-	if len(pageFiles) >= 2 && targetWorkers < 2 {
-		targetWorkers = 2
+
+	numCores := runtime.NumCPU()
+	ioWorkers := min(numCores*2, len(pageFiles))
+	numWorkers := min(numCores*3, len(pageFiles))
+
+	pageChan := make(chan int, len(pageFiles))
+	rawChan := make(chan rawPageData, len(pageFiles))
+	resultChan := make(chan pageResult, numWorkers*4)
+
+	ioWg := sync.WaitGroup{}
+	for range ioWorkers {
+		ioWg.Add(1)
+		go func() {
+			defer ioWg.Done()
+			for idx := range pageChan {
+				pageFile := pageFiles[idx]
+				pageNum := extractPageNum(pageFile)
+				rawData, err := readRawPageData(pageFile)
+				rawChan <- rawPageData{idx: idx, pageNum: pageNum, data: rawData, err: err}
+				Logger.Debug("read raw page", "page", pageNum, "err", err)
+			}
+		}()
 	}
-	if targetWorkers > 0 && targetWorkers < numWorkers {
-		numWorkers = targetWorkers
+
+	go func() {
+		ioWg.Wait()
+		close(rawChan)
+	}()
+
+	cpuWg := sync.WaitGroup{}
+	for range numWorkers {
+		cpuWg.Add(1)
+		go func() {
+			defer cpuWg.Done()
+			for raw := range rawChan {
+				if raw.err != nil {
+					resultChan <- pageResult{idx: raw.idx, pageNum: raw.pageNum, json: nil, err: raw.err}
+					continue
+				}
+
+				buf := bufferPool.Get().(*bytes.Buffer)
+				buf.Reset()
+
+				err := processRawPage(raw.data, buf)
+				if err != nil {
+					bufferPool.Put(buf)
+					resultChan <- pageResult{idx: raw.idx, pageNum: raw.pageNum, json: nil, err: err}
+					continue
+				}
+
+				result := buf.Bytes()
+				if len(result) > 0 && result[len(result)-1] == '\n' {
+					result = result[:len(result)-1]
+				}
+				output := append([]byte(nil), result...)
+
+				buf.Reset()
+				bufferPool.Put(buf)
+
+				resultChan <- pageResult{idx: raw.idx, pageNum: raw.pageNum, json: output, err: nil}
+				Logger.Debug("processed page", "page", raw.pageNum)
+			}
+		}()
 	}
-	if len(pageFiles) < 64 && numWorkers > 8 {
-		numWorkers = 8
-	}
-	threshold := 2
-	outputDir := filepath.Dir(outputPath)
-	tempFile, err := os.CreateTemp(outputDir, "tojson-*.tmp")
+
+	go func() {
+		cpuWg.Wait()
+		close(resultChan)
+	}()
+
+	go func() {
+		for i := range pageFiles {
+			pageChan <- i
+		}
+		close(pageChan)
+	}()
+
+	outputFile, err := os.OpenFile(outputPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
 	if err != nil {
 		Logger.Error("output file error", "err", err)
 		return err
 	}
-	tempPath := tempFile.Name()
-	cleanupTemp := true
-	defer func() {
-		if tempFile != nil {
-			tempFile.Close()
-		}
-		if cleanupTemp {
-			os.Remove(tempPath)
-		}
-	}()
-	writer := bufio.NewWriter(tempFile)
+	defer outputFile.Close()
+
+	writer := bufio.NewWriterSize(outputFile, 1<<20)
 	if _, err := writer.WriteString("["); err != nil {
 		Logger.Error("write error", "err", err)
 		return err
@@ -143,113 +206,33 @@ func pdfToJson(pdfPath, outputPath string) error {
 		return nil
 	}
 
-	if len(pageFiles) < threshold {
-		for _, pageFile := range pageFiles {
-			pageNum := extractPageNum(pageFile)
-			rawData, err := readRawPageData(pageFile)
-			if err != nil {
-				Logger.Error("processing error", "err", err)
-				return err
-			}
-			buf := bufferPool.Get().(*bytes.Buffer)
-			buf.Reset()
-			err = processRawPage(rawData, buf)
-			if err != nil {
-				bufferPool.Put(buf)
-				Logger.Error("processing error", "err", err)
-				return err
-			}
-			result := buf.Bytes()
-			if len(result) > 0 && result[len(result)-1] == '\n' {
-				result = result[:len(result)-1]
-			}
-			pageJSON := append([]byte(nil), result...)
-			buf.Reset()
-			bufferPool.Put(buf)
-			if err := writePage(pageJSON, pageNum); err != nil {
-				Logger.Error("write error", "err", err)
-				return err
-			}
-		}
-	} else {
-		var wg sync.WaitGroup
-		pageChan := make(chan int, numWorkers)
-		resultChan := make(chan pageResult, numWorkers)
+	pending := make(map[int]pageResult, len(pageFiles))
 
-		for i := 0; i < numWorkers; i++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				for idx := range pageChan {
-					pageFile := pageFiles[idx]
-					pageNum := extractPageNum(pageFile)
-					rawData, err := readRawPageData(pageFile)
-					if err != nil {
-						resultChan <- pageResult{idx: idx, pageNum: pageNum, json: nil, err: err}
-						Logger.Debug("processed page", "page", pageNum, "err", err)
-						continue
-					}
-					buf := bufferPool.Get().(*bytes.Buffer)
-					buf.Reset()
-					err = processRawPage(rawData, buf)
-					if err != nil {
-						bufferPool.Put(buf)
-						resultChan <- pageResult{idx: idx, pageNum: pageNum, json: nil, err: err}
-						Logger.Debug("processed page", "page", pageNum, "err", err)
-						continue
-					}
-					result := buf.Bytes()
-					if len(result) > 0 && result[len(result)-1] == '\n' {
-						result = result[:len(result)-1]
-					}
-					output := append([]byte(nil), result...)
-					buf.Reset()
-					bufferPool.Put(buf)
-					resultChan <- pageResult{idx: idx, pageNum: pageNum, json: output, err: nil}
-					Logger.Debug("processed page", "page", pageNum)
+	nextIdx := 0
+	var firstErr error
+	for res := range resultChan {
+		if res.err != nil && firstErr == nil {
+			firstErr = res.err
+			Logger.Error("processing error", "err", res.err)
+		}
+		pending[res.idx] = res
+		for {
+			nextRes, ok := pending[nextIdx]
+			if !ok {
+				break
+			}
+			if firstErr == nil {
+				if err := writePage(nextRes.json, nextRes.pageNum); err != nil {
+					firstErr = err
+					Logger.Error("write error", "err", err)
 				}
-			}()
-		}
-
-		go func() {
-			wg.Wait()
-			close(resultChan)
-		}()
-
-		go func() {
-			for i := range pageFiles {
-				pageChan <- i
 			}
-			close(pageChan)
-		}()
-
-		pending := make(map[int]pageResult, numWorkers)
-		nextIdx := 0
-		var firstErr error
-		for res := range resultChan {
-			if res.err != nil && firstErr == nil {
-				firstErr = res.err
-				Logger.Error("processing error", "err", res.err)
-			}
-			pending[res.idx] = res
-			for {
-				nextRes, ok := pending[nextIdx]
-				if !ok {
-					break
-				}
-				if firstErr == nil {
-					if err := writePage(nextRes.json, nextRes.pageNum); err != nil {
-						firstErr = err
-						Logger.Error("write error", "err", err)
-					}
-				}
-				delete(pending, nextIdx)
-				nextIdx++
-			}
+			delete(pending, nextIdx)
+			nextIdx++
 		}
-		if firstErr != nil {
-			return firstErr
-		}
+	}
+	if firstErr != nil {
+		return firstErr
 	}
 
 	if _, err := writer.WriteString("]\n"); err != nil {
@@ -260,16 +243,10 @@ func pdfToJson(pdfPath, outputPath string) error {
 		Logger.Error("write error", "err", err)
 		return err
 	}
-	if err := tempFile.Close(); err != nil {
+	if err := outputFile.Close(); err != nil {
 		Logger.Error("output file error", "err", err)
 		return err
 	}
-	tempFile = nil
-	if err := os.Rename(tempPath, outputPath); err != nil {
-		Logger.Error("rename error", "err", err)
-		return err
-	}
-	cleanupTemp = false
 
 	totalElapsed := time.Since(startTotal)
 	Logger.Info("raw data extraction", "timeInC", rawElapsed)
@@ -293,13 +270,44 @@ func extractPageNum(filename string) int {
 }
 
 func main() {
-	if len(os.Args) < 3 {
-		fmt.Println("Usage: ./tojson <input.pdf> [output_json]")
+	cpuprofile := flag.String("cpuprofile", "", "write cpu profile to file")
+
+	memprofile := flag.String("memprofile", "", "write memory profile to file")
+	flag.Parse()
+
+	if *cpuprofile != "" {
+		f, err := os.Create(*cpuprofile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Could not create CPU profile: %v\n", err)
+			os.Exit(1)
+		}
+		pprof.StartCPUProfile(f)
+		defer pprof.StopCPUProfile()
+	}
+
+	args := flag.Args()
+	if len(args) < 2 {
+		fmt.Println("Usage: ./tojson <input.pdf> <output_json>")
 		os.Exit(1)
 	}
-	err := pdfToJson(os.Args[1], os.Args[2])
+
+	err := pdfToJson(args[0], args[1])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
+	}
+
+	if *memprofile != "" {
+		f, err := os.Create(*memprofile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Could not create memory profile: %v\n", err)
+			os.Exit(1)
+		}
+		defer f.Close()
+		runtime.GC()
+		if err := pprof.WriteHeapProfile(f); err != nil {
+			fmt.Fprintf(os.Stderr, "Could not write memory profile: %v\n", err)
+			os.Exit(1)
+		}
 	}
 }
