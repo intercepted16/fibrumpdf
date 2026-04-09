@@ -1,31 +1,53 @@
 """cli entry point."""
 
 from __future__ import annotations
+
 import logging
-import sys
 from pathlib import Path
+from typing import Annotated, Optional
+
+import typer
+
 from .api import ExtractionError, to_json
 
 
-def main(argv: list[str] | None = None) -> int:
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
-
-    args = argv if argv is not None else sys.argv[1:]
-    if not args or len(args) > 2:
-        print(
-            f"usage: {Path(sys.argv[0]).name} <input.pdf> [output.json]",
-            file=sys.stderr,
-        )
-        return 1
-
+def run(
+    pdf_path: Annotated[
+        Path,
+        typer.Argument(
+            exists=True,
+            dir_okay=False,
+            readable=True,
+            resolve_path=True,
+            help="PDF file to extract",
+        ),
+    ],
+    output: Annotated[
+        Optional[Path],
+        typer.Argument(help="Output JSON path (defaults to pdf_path.json)"),
+    ] = None,
+    verbose: Annotated[
+        bool, typer.Option("--verbose", "-v", help="Enable verbose logging")
+    ] = False,
+) -> None:
+    """Extract PDF content to JSON."""
+    logging.basicConfig(
+        level=logging.DEBUG if verbose else logging.INFO,
+        format="%(levelname)s: %(message)s",
+        force=True,
+    )
     try:
-        result = to_json(args[0], args[1] if len(args) > 1 else None)
+        result = to_json(pdf_path, output)
         logging.getLogger(__name__).info("wrote %s", result.path)
-        return 0
     except (FileNotFoundError, ExtractionError) as e:
-        logging.getLogger(__name__).error("%s", e)
-        return 1
+        typer.secho(f"Error: {e}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1) from e
+
+
+def main() -> None:
+    """CLI entry point."""
+    typer.run(run)
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()
