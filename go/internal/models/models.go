@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"strconv"
 
-	"github.com/pymupdf4llm-c/go/internal/geometry"
+	"github.com/fibrumpdf/go/internal/geometry"
 )
 
 type BBox [4]float32

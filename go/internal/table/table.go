@@ -5,10 +5,10 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/pymupdf4llm-c/go/internal/bridge"
-	"github.com/pymupdf4llm-c/go/internal/geometry"
-	"github.com/pymupdf4llm-c/go/internal/logger"
-	"github.com/pymupdf4llm-c/go/internal/models"
+	"github.com/fibrumpdf/go/internal/bridge"
+	"github.com/fibrumpdf/go/internal/geometry"
+	"github.com/fibrumpdf/go/internal/logger"
+	"github.com/fibrumpdf/go/internal/models"
 	"github.com/tidwall/rtree"
 )
 

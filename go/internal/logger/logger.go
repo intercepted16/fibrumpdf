@@ -26,7 +26,7 @@ const (
 func init() {
 	var fileHandler *customHandler
 
-	logPath := filepath.Join(tempDir, "pymupdf4llm_c.log")
+	logPath := filepath.Join(tempDir, "fibrumpdf.log")
 	
 	fmt.Printf("writing all logs to: %s\n", logPath)
 
