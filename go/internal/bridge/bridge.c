@@ -3,7 +3,8 @@
 // (approx. 3x slower overall)
 // so, use one function that writes to disk instead, much less overhead.
 // this is mostly pre existing logic just written to be used via Go.
-// additionally, the raw 'binary' format is used for performance and less disk usage. json gets very taxing on thousands of chars.
+// additionally, the raw 'binary' format is used for performance and less disk usage. json gets very taxing on thousands
+// of chars.
 
 #include "bridge.h"
 #include <stdlib.h>
@@ -21,14 +22,15 @@
 #define EDGE_MAX_WIDTH 3.0
 #define FZ_STORE_SIZE 256 * 1024 * 1024
 
-typedef struct
+    typedef struct
 {
     fz_device super;
-    fz_device* stext_dev;  
+    fz_device* stext_dev;
     edge_array* edges;
 } combined_device;
 
-typedef struct {
+typedef struct
+{
     fz_font* font;
     unsigned char flags;
 } font_cache_entry;
@@ -37,20 +39,28 @@ typedef struct {
    Uses process-shared mutex to synchronize access between workers.
    Persists across all pages and all workers to maximize cache reuse. */
 #define FONT_CACHE_SIZE 256
-typedef struct {
+typedef struct
+{
     pthread_mutex_t lock;
     font_cache_entry entries[FONT_CACHE_SIZE];
     int len;
 } shared_font_cache;
 
 static shared_font_cache* global_font_cache = NULL;
+static font_cache_entry local_font_cache[FONT_CACHE_SIZE];
+static int local_font_cache_len = 0;
+static int use_shared_font_cache = 0;
+
+static void reset_local_font_cache(void)
+{
+    local_font_cache_len = 0;
+}
 
 /* Initialize shared font cache (call in parent before fork) */
-static int init_shared_font_cache(void) {
-    global_font_cache = mmap(NULL, sizeof(shared_font_cache), 
-                             PROT_READ | PROT_WRITE, 
-                             MAP_SHARED | MAP_ANONYMOUS, 
-                             -1, 0);
+static int init_shared_font_cache(void)
+{
+    global_font_cache =
+        mmap(NULL, sizeof(shared_font_cache), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
     if (global_font_cache == MAP_FAILED)
         return -1;
 
@@ -59,8 +69,9 @@ static int init_shared_font_cache(void) {
     pthread_mutexattr_setpshared(&attr, PTHREAD_PROCESS_SHARED);
     int ret = pthread_mutex_init(&global_font_cache->lock, &attr);
     pthread_mutexattr_destroy(&attr);
-    
-    if (ret != 0) {
+
+    if (ret != 0)
+    {
         munmap(global_font_cache, sizeof(shared_font_cache));
         global_font_cache = NULL;
         return -1;
@@ -71,7 +82,8 @@ static int init_shared_font_cache(void) {
 }
 
 /* Cleanup shared font cache (call after all workers finish) */
-static void cleanup_shared_font_cache(void) {
+static void cleanup_shared_font_cache(void)
+{
     if (!global_font_cache)
         return;
     pthread_mutex_destroy(&global_font_cache->lock);
@@ -80,41 +92,89 @@ static void cleanup_shared_font_cache(void) {
 }
 
 /* Lookup or add font to shared cache. Returns flags for the font. */
-static unsigned char get_font_flags(fz_context* ctx, fz_font* f) {
-    if (!f || !global_font_cache)
+static unsigned char get_font_flags(fz_context* ctx, fz_font* f)
+{
+    if (!f)
         return 0;
 
-    pthread_mutex_lock(&global_font_cache->lock);
+    if (use_shared_font_cache && global_font_cache)
+    {
+        pthread_mutex_lock(&global_font_cache->lock);
 
-    for (int i = 0; i < global_font_cache->len; i++) {
-        if (global_font_cache->entries[i].font == f) {
-            unsigned char flags = global_font_cache->entries[i].flags;
-            pthread_mutex_unlock(&global_font_cache->lock);
-            return flags;
+        for (int i = 0; i < global_font_cache->len; i++)
+        {
+            if (global_font_cache->entries[i].font == f)
+            {
+                unsigned char flags = global_font_cache->entries[i].flags;
+                pthread_mutex_unlock(&global_font_cache->lock);
+                return flags;
+            }
         }
+
+        unsigned char flags = 0;
+        if (fz_font_is_bold(ctx, f))
+            flags |= 1;
+        if (fz_font_is_italic(ctx, f))
+            flags |= 2;
+        if (fz_font_is_monospaced(ctx, f))
+            flags |= 4;
+
+        if (global_font_cache->len < FONT_CACHE_SIZE)
+        {
+            global_font_cache->entries[global_font_cache->len].font = f;
+            global_font_cache->entries[global_font_cache->len].flags = flags;
+            global_font_cache->len++;
+        }
+
+        pthread_mutex_unlock(&global_font_cache->lock);
+        return flags;
+    }
+
+    for (int i = 0; i < local_font_cache_len; i++)
+    {
+        if (local_font_cache[i].font == f)
+            return local_font_cache[i].flags;
     }
 
     unsigned char flags = 0;
-    if (fz_font_is_bold(ctx, f)) flags |= 1;
-    if (fz_font_is_italic(ctx, f)) flags |= 2;
-    if (fz_font_is_monospaced(ctx, f)) flags |= 4;
+    if (fz_font_is_bold(ctx, f))
+        flags |= 1;
+    if (fz_font_is_italic(ctx, f))
+        flags |= 2;
+    if (fz_font_is_monospaced(ctx, f))
+        flags |= 4;
 
-    if (global_font_cache->len < FONT_CACHE_SIZE) {
-        global_font_cache->entries[global_font_cache->len].font = f;
-        global_font_cache->entries[global_font_cache->len].flags = flags;
-        global_font_cache->len++;
+    if (local_font_cache_len < FONT_CACHE_SIZE)
+    {
+        local_font_cache[local_font_cache_len].font = f;
+        local_font_cache[local_font_cache_len].flags = flags;
+        local_font_cache_len++;
     }
 
-    pthread_mutex_unlock(&global_font_cache->lock);
     return flags;
 }
 
-static void mupdf_warning_callback(void* user, const char* message) {
+static int should_skip_images(void)
+{
+    static int init = 0;
+    static int skip = 0;
+    if (!init)
+    {
+        const char* v = getenv("PYMUPDF_SKIP_IMAGES");
+        skip = (v && v[0] != '\0' && v[0] != '0') ? 1 : 0;
+        init = 1;
+    }
+    return skip;
+}
+
+static void mupdf_warning_callback(void* user, const char* message)
+{
     (void)user;
     (void)message;
 }
 
-static void mupdf_error_callback(void* user, const char* message) {
+static void mupdf_error_callback(void* user, const char* message)
+{
     (void)user;
     (void)message;
 }
@@ -181,8 +241,8 @@ static void combined_stroke_path(fz_context* ctx, fz_device* dev, const fz_path*
         cdev->stext_dev->stroke_path(ctx, cdev->stext_dev, path, stroke, ctm, cs, color, alpha, cp);
 }
 
-static void combined_fill_text(fz_context* ctx, fz_device* dev, const fz_text* text, fz_matrix ctm,
-                               fz_colorspace* cs, const float* color, float alpha, fz_color_params cp)
+static void combined_fill_text(fz_context* ctx, fz_device* dev, const fz_text* text, fz_matrix ctm, fz_colorspace* cs,
+                               const float* color, float alpha, fz_color_params cp)
 {
     combined_device* cdev = (combined_device*)dev;
     if (cdev->stext_dev && cdev->stext_dev->fill_text)
@@ -204,8 +264,8 @@ static void combined_clip_text(fz_context* ctx, fz_device* dev, const fz_text* t
         cdev->stext_dev->clip_text(ctx, cdev->stext_dev, text, ctm, scissor);
 }
 
-static void combined_clip_stroke_text(fz_context* ctx, fz_device* dev, const fz_text* text, const fz_stroke_state* stroke,
-                                      fz_matrix ctm, fz_rect scissor)
+static void combined_clip_stroke_text(fz_context* ctx, fz_device* dev, const fz_text* text,
+                                      const fz_stroke_state* stroke, fz_matrix ctm, fz_rect scissor)
 {
     combined_device* cdev = (combined_device*)dev;
     if (cdev->stext_dev && cdev->stext_dev->clip_stroke_text)
@@ -219,24 +279,30 @@ static void combined_ignore_text(fz_context* ctx, fz_device* dev, const fz_text*
         cdev->stext_dev->ignore_text(ctx, cdev->stext_dev, text, ctm);
 }
 
-static void combined_fill_shade(fz_context* ctx, fz_device* dev, fz_shade* shd, fz_matrix ctm, float alpha, fz_color_params cp)
+static void combined_fill_shade(fz_context* ctx, fz_device* dev, fz_shade* shd, fz_matrix ctm, float alpha,
+                                fz_color_params cp)
 {
     combined_device* cdev = (combined_device*)dev;
     if (cdev->stext_dev && cdev->stext_dev->fill_shade)
         cdev->stext_dev->fill_shade(ctx, cdev->stext_dev, shd, ctm, alpha, cp);
 }
 
-static void combined_fill_image(fz_context* ctx, fz_device* dev, fz_image* img, fz_matrix ctm, float alpha, fz_color_params cp)
+static void combined_fill_image(fz_context* ctx, fz_device* dev, fz_image* img, fz_matrix ctm, float alpha,
+                                fz_color_params cp)
 {
     combined_device* cdev = (combined_device*)dev;
+    if (should_skip_images())
+        return;
     if (cdev->stext_dev && cdev->stext_dev->fill_image)
         cdev->stext_dev->fill_image(ctx, cdev->stext_dev, img, ctm, alpha, cp);
 }
 
-static void combined_fill_image_mask(fz_context* ctx, fz_device* dev, fz_image* img, fz_matrix ctm,
-                                     fz_colorspace* cs, const float* color, float alpha, fz_color_params cp)
+static void combined_fill_image_mask(fz_context* ctx, fz_device* dev, fz_image* img, fz_matrix ctm, fz_colorspace* cs,
+                                     const float* color, float alpha, fz_color_params cp)
 {
     combined_device* cdev = (combined_device*)dev;
+    if (should_skip_images())
+        return;
     if (cdev->stext_dev && cdev->stext_dev->fill_image_mask)
         cdev->stext_dev->fill_image_mask(ctx, cdev->stext_dev, img, ctm, cs, color, alpha, cp);
 }
@@ -318,7 +384,8 @@ static void write_all_char_data(FILE* out, fz_context* ctx, fz_stext_page* stext
     (void)expected_total; // could assert match
 }
 
-static int count_links(fz_link* links) {
+static int count_links(fz_link* links)
+{
     int count = 0;
     for (fz_link* l = links; l; l = l->next)
         count++;
@@ -394,6 +461,8 @@ static int extract_page_to_file(fz_context* ctx, fz_document* doc, int page_num,
 
         for (fz_stext_block* block = stext->first_block; block; block = block->next)
         {
+            if (block->type != FZ_STEXT_BLOCK_TEXT)
+                continue;
 
             if (total_blocks >= blocks_capacity)
             {
@@ -475,7 +544,8 @@ static int extract_page_to_file(fz_context* ctx, fz_document* doc, int page_num,
         if (edges.count > 0)
             fwrite(edges.items, sizeof(edge), edges.count, out);
 
-        for (fz_link* l = page_links; l; l = l->next) {
+        for (fz_link* l = page_links; l; l = l->next)
+        {
             fwrite(&l->rect, sizeof(fz_rect), 1, out);
             const char* uri = l->uri ? l->uri : "";
             int uri_len = strlen(uri);
@@ -486,7 +556,6 @@ static int extract_page_to_file(fz_context* ctx, fz_document* doc, int page_num,
 
         fclose(out);
         out = NULL;
-
     }
     fz_always(ctx)
     {
@@ -523,19 +592,20 @@ char* extract_all_pages(const char* pdf_path)
     snprintf(temp_dir, 256, ".pymupdfllm_c_%ld_%u", (long)time(NULL), (unsigned)getpid());
     mkdir(temp_dir, 0755);
 
-    if (init_shared_font_cache() != 0) {
+    use_shared_font_cache = 0;
+    global_font_cache = NULL;
+    reset_local_font_cache();
+
+    fz_context* ctx = fz_new_context(NULL, NULL, FZ_STORE_SIZE);
+
+    if (!ctx)
+    {
+        cleanup_shared_font_cache();
         free(temp_dir);
         return NULL;
     }
-
-    fz_context* ctx = fz_new_context(NULL, NULL, FZ_STORE_SIZE);
     fz_set_warning_callback(ctx, mupdf_warning_callback, NULL);
     fz_set_error_callback(ctx, mupdf_error_callback, NULL);
-
-    if (!ctx) {
-        cleanup_shared_font_cache();        free(temp_dir);
-        return NULL;
-    }
 
     fz_document* doc = NULL;
     int page_count = 0;
@@ -552,17 +622,20 @@ char* extract_all_pages(const char* pdf_path)
         error = 1;
     }
 
-    if (error || page_count == 0) {
+    if (error || page_count == 0)
+    {
         if (doc)
             fz_drop_document(ctx, doc);
         fz_drop_context(ctx);
-        cleanup_shared_font_cache();        free(temp_dir);
+        cleanup_shared_font_cache();
+        free(temp_dir);
         return NULL;
     }
 
     int num_workers = sysconf(_SC_NPROCESSORS_ONLN);
-    const char *workers_env = getenv("PYMUPDF_WORKERS");
-    if (workers_env && workers_env[0] != '\0') {
+    const char* workers_env = getenv("PYMUPDF_WORKERS");
+    if (workers_env && workers_env[0] != '\0')
+    {
         long w = strtol(workers_env, NULL, 10);
         if (w > 0)
             num_workers = (int)w;
@@ -571,22 +644,62 @@ char* extract_all_pages(const char* pdf_path)
         num_workers = 4;
 
     int threshold = (10 > num_workers * 2) ? 10 : num_workers * 2;
-    if (page_count < threshold) {
-        num_workers = 1;  /* force sequential */
+    if (page_count < threshold)
+    {
+        num_workers = 1; /* force sequential */
     }
 
-    pid_t* pids = calloc(num_workers, sizeof(pid_t));
-    if (!pids) {
+    if (num_workers > 1)
+    {
+        if (init_shared_font_cache() != 0)
+        {
+            if (doc)
+                fz_drop_document(ctx, doc);
+            fz_drop_context(ctx);
+            free(temp_dir);
+            return NULL;
+        }
+        use_shared_font_cache = 1;
+    }
+    else
+    {
+        use_shared_font_cache = 0;
+        reset_local_font_cache();
+    }
+
+    if (num_workers == 1)
+    {
+        for (int p = 0; p < page_count; p++)
+        {
+            char filename[512];
+            snprintf(filename, sizeof(filename), "%s/page_%03d.raw", temp_dir, p + 1);
+            if (extract_page_to_file(ctx, doc, p, filename) != 0)
+                fprintf(stderr, "Warning: failed to extract page %d\n", p + 1);
+        }
+
         if (doc)
             fz_drop_document(ctx, doc);
         fz_drop_context(ctx);
-        cleanup_shared_font_cache();        free(temp_dir);
+        return temp_dir;
+    }
+
+    pid_t* pids = calloc(num_workers, sizeof(pid_t));
+    if (!pids)
+    {
+        if (doc)
+            fz_drop_document(ctx, doc);
+        fz_drop_context(ctx);
+        if (use_shared_font_cache)
+            cleanup_shared_font_cache();
+        free(temp_dir);
         return NULL;
     }
     int created = 0;
 
-    for (int i = 0; i < num_workers; i++) {
-        int start = i;        if (start >= page_count)
+    for (int i = 0; i < num_workers; i++)
+    {
+        int start = i;
+        if (start >= page_count)
             break;
 
         pid_t pid = fork();
@@ -595,7 +708,8 @@ char* extract_all_pages(const char* pdf_path)
             perror("fork");
             continue;
         }
-        if (pid == 0) {
+        if (pid == 0)
+        {
             /* CHILD: open its own context/document and process pages in round-robin */
             fz_context* child_ctx = fz_new_context(NULL, NULL, FZ_STORE_SIZE);
             if (!child_ctx)
@@ -604,11 +718,13 @@ char* extract_all_pages(const char* pdf_path)
             fz_set_error_callback(child_ctx, mupdf_error_callback, NULL);
 
             fz_document* child_doc = NULL;
-            fz_try(child_ctx) {
+            fz_try(child_ctx)
+            {
                 fz_register_document_handlers(child_ctx);
                 child_doc = fz_open_document(child_ctx, pdf_path);
             }
-            fz_catch(child_ctx) {
+            fz_catch(child_ctx)
+            {
                 if (child_doc)
                     fz_drop_document(child_ctx, child_doc);
                 fz_drop_context(child_ctx);
@@ -623,7 +739,8 @@ char* extract_all_pages(const char* pdf_path)
             if (child_do_profile)
                 clock_gettime(CLOCK_MONOTONIC, &child_t0);
 
-            for (int p = start; p < page_count; p += num_workers) {
+            for (int p = start; p < page_count; p += num_workers)
+            {
                 char filename[512];
                 snprintf(filename, sizeof(filename), "%s/page_%03d.raw", temp_dir, p + 1);
                 if (extract_page_to_file(child_ctx, child_doc, p, filename) != 0)
@@ -631,7 +748,8 @@ char* extract_all_pages(const char* pdf_path)
                 pages_processed++;
             }
 
-            if (child_do_profile) {
+            if (child_do_profile)
+            {
                 clock_gettime(CLOCK_MONOTONIC, &child_t1);
                 double sec = (child_t1.tv_sec - child_t0.tv_sec) + (child_t1.tv_nsec - child_t0.tv_nsec) * 1e-9;
                 fprintf(stderr, "CHILD PROFILE pid=%d pages=%d total=%.3f s\n", (int)getpid(), pages_processed, sec);
@@ -640,24 +758,27 @@ char* extract_all_pages(const char* pdf_path)
             if (child_doc)
                 fz_drop_document(child_ctx, child_doc);
             fz_drop_context(child_ctx);
-            _exit(0);        }
+            _exit(0);
+        }
         pids[created++] = pid;
     }
 
     /* Using round-robin forked workers; no pipe writes necessary. Parent simply waits for children. */
 
-    for (int i = 0; i < created; i++) {
+    for (int i = 0; i < created; i++)
+    {
         int wstatus;
         waitpid(pids[i], &wstatus, 0);
     }
 
-   if (doc)
+    if (doc)
         fz_drop_document(ctx, doc);
     fz_drop_context(ctx);
 
-    cleanup_shared_font_cache();
+    if (use_shared_font_cache)
+        cleanup_shared_font_cache();
     free(pids);
-    
+
     return temp_dir;
 }
 
