@@ -17,9 +17,9 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/pymupdf4llm-c/go/internal/bridge"
-	"github.com/pymupdf4llm-c/go/internal/extractor"
-	"github.com/pymupdf4llm-c/go/internal/logger"
+	"github.com/fibrumpdf/go/internal/bridge"
+	"github.com/fibrumpdf/go/internal/extractor"
+	"github.com/fibrumpdf/go/internal/logger"
 )
 
 var Logger = logger.GetLogger("tomd")

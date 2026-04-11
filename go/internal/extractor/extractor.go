@@ -5,13 +5,13 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/pymupdf4llm-c/go/internal/bridge"
-	"github.com/pymupdf4llm-c/go/internal/column"
-	"github.com/pymupdf4llm-c/go/internal/geometry"
-	"github.com/pymupdf4llm-c/go/internal/logger"
-	"github.com/pymupdf4llm-c/go/internal/models"
-	"github.com/pymupdf4llm-c/go/internal/table"
-	"github.com/pymupdf4llm-c/go/internal/text"
+	"github.com/fibrumpdf/go/internal/bridge"
+	"github.com/fibrumpdf/go/internal/column"
+	"github.com/fibrumpdf/go/internal/geometry"
+	"github.com/fibrumpdf/go/internal/logger"
+	"github.com/fibrumpdf/go/internal/models"
+	"github.com/fibrumpdf/go/internal/table"
+	"github.com/fibrumpdf/go/internal/text"
 )
 
 var Logger = logger.GetLogger("extractor")

@@ -12,7 +12,7 @@ import (
 	"errors"
 	"unsafe"
 
-	"github.com/pymupdf4llm-c/go/internal/logger"
+	"github.com/fibrumpdf/go/internal/logger"
 )
 
 var Logger = logger.GetLogger("bridge")

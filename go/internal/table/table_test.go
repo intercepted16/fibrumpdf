@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pymupdf4llm-c/go/internal/bridge"
-	"github.com/pymupdf4llm-c/go/internal/geometry"
-	"github.com/pymupdf4llm-c/go/internal/testutil"
+	"github.com/fibrumpdf/go/internal/bridge"
+	"github.com/fibrumpdf/go/internal/geometry"
+	"github.com/fibrumpdf/go/internal/testutil"
 )
 
 func loadTestPDFPages(t *testing.T, pdfName string) []*bridge.RawPageData {

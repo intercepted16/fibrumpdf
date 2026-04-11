@@ -4,8 +4,8 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/pymupdf4llm-c/go/internal/models"
-	"github.com/pymupdf4llm-c/go/internal/text"
+	"github.com/fibrumpdf/go/internal/models"
+	"github.com/fibrumpdf/go/internal/text"
 )
 
 type CleanupOpts struct {
