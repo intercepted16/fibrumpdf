@@ -8,6 +8,7 @@
 #include "bridge.h"
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <stdio.h>
 #include <time.h>
 #include <unistd.h>
@@ -16,10 +17,14 @@
 #include <sys/types.h>
 #include <sys/mman.h>
 #include <pthread.h>
+#include <math.h>
 
 #define EDGE_MIN_LENGTH 3.0
 #define EDGE_MAX_WIDTH 3.0
 #define FZ_STORE_SIZE 256 * 1024 * 1024
+#define MIN_EDGE_LENGTH 6.0
+#define EDGE_DUP_TOL 0.35
+#define MAX_DUP_CHECK 48
 
 typedef struct
 {
@@ -44,6 +49,45 @@ typedef struct {
 } shared_font_cache;
 
 static shared_font_cache* global_font_cache = NULL;
+
+static int contains_token_ci(const char* haystack, const char* needle) {
+    if (!haystack || !needle || !needle[0])
+        return 0;
+    size_t hlen = strlen(haystack);
+    size_t nlen = strlen(needle);
+    if (nlen > hlen)
+        return 0;
+    for (size_t i = 0; i <= hlen - nlen; i++) {
+        size_t j = 0;
+        while (j < nlen) {
+            unsigned char hc = (unsigned char)haystack[i + j];
+            unsigned char nc = (unsigned char)needle[j];
+            if (tolower(hc) != tolower(nc))
+                break;
+            j++;
+        }
+        if (j == nlen)
+            return 1;
+    }
+    return 0;
+}
+
+static unsigned char infer_style_from_font_name(const char* name) {
+    if (!name || !name[0])
+        return 0;
+
+    unsigned char flags = 0;
+    if (contains_token_ci(name, "bold") || contains_token_ci(name, "black") ||
+        contains_token_ci(name, "heavy") || contains_token_ci(name, "semibold") ||
+        contains_token_ci(name, "demi")) {
+        flags |= 1;
+    }
+    if (contains_token_ci(name, "italic") || contains_token_ci(name, "oblique") ||
+        contains_token_ci(name, "kursiv") || contains_token_ci(name, "slanted")) {
+        flags |= 2;
+    }
+    return flags;
+}
 
 /* Initialize shared font cache (call in parent before fork) */
 static int init_shared_font_cache(void) {
@@ -95,9 +139,13 @@ static unsigned char get_font_flags(fz_context* ctx, fz_font* f) {
     }
 
     unsigned char flags = 0;
+    fz_font_flags_t* ff = fz_font_flags(f);
     if (fz_font_is_bold(ctx, f)) flags |= 1;
     if (fz_font_is_italic(ctx, f)) flags |= 2;
     if (fz_font_is_monospaced(ctx, f)) flags |= 4;
+    if (ff && ff->fake_bold) flags |= 1;
+    if (ff && ff->fake_italic) flags |= 2;
+    flags |= infer_style_from_font_name(fz_font_name(ctx, f));
 
     if (global_font_cache->len < FONT_CACHE_SIZE) {
         global_font_cache->entries[global_font_cache->len].font = f;
@@ -221,24 +269,35 @@ static void combined_ignore_text(fz_context* ctx, fz_device* dev, const fz_text*
 
 static void combined_fill_shade(fz_context* ctx, fz_device* dev, fz_shade* shd, fz_matrix ctm, float alpha, fz_color_params cp)
 {
-    combined_device* cdev = (combined_device*)dev;
-    if (cdev->stext_dev && cdev->stext_dev->fill_shade)
-        cdev->stext_dev->fill_shade(ctx, cdev->stext_dev, shd, ctm, alpha, cp);
+    (void)ctx;
+    (void)dev;
+    (void)shd;
+    (void)ctm;
+    (void)alpha;
+    (void)cp;
 }
 
 static void combined_fill_image(fz_context* ctx, fz_device* dev, fz_image* img, fz_matrix ctm, float alpha, fz_color_params cp)
 {
-    combined_device* cdev = (combined_device*)dev;
-    if (cdev->stext_dev && cdev->stext_dev->fill_image)
-        cdev->stext_dev->fill_image(ctx, cdev->stext_dev, img, ctm, alpha, cp);
+    (void)ctx;
+    (void)dev;
+    (void)img;
+    (void)ctm;
+    (void)alpha;
+    (void)cp;
 }
 
 static void combined_fill_image_mask(fz_context* ctx, fz_device* dev, fz_image* img, fz_matrix ctm,
                                      fz_colorspace* cs, const float* color, float alpha, fz_color_params cp)
 {
-    combined_device* cdev = (combined_device*)dev;
-    if (cdev->stext_dev && cdev->stext_dev->fill_image_mask)
-        cdev->stext_dev->fill_image_mask(ctx, cdev->stext_dev, img, ctm, cs, color, alpha, cp);
+    (void)ctx;
+    (void)dev;
+    (void)img;
+    (void)ctm;
+    (void)cs;
+    (void)color;
+    (void)alpha;
+    (void)cp;
 }
 
 static void combined_begin_metatext(fz_context* ctx, fz_device* dev, fz_metatext meta, const char* text)
@@ -279,43 +338,189 @@ static void free_edge_array(edge_array* edges)
     edges->capacity = 0;
 }
 
+static double edge_length(const edge* e)
+{
+    if (!e)
+        return 0.0;
+    if (e->orientation == 'h')
+        return fabs(e->x1 - e->x0);
+    return fabs(e->y1 - e->y0);
+}
+
+static int edges_similar(const edge* a, const edge* b)
+{
+    if (!a || !b)
+        return 0;
+    if (a->orientation != b->orientation)
+        return 0;
+    double tol = EDGE_DUP_TOL;
+    if (fabs(a->x0 - b->x0) > tol || fabs(a->y0 - b->y0) > tol)
+        return 0;
+    if (fabs(a->x1 - b->x1) > tol || fabs(a->y1 - b->y1) > tol)
+        return 0;
+    return 1;
+}
+
+static void filter_edges(edge_array* arr)
+{
+    if (!arr || arr->count <= 0)
+        return;
+    edge* old = arr->items;
+    int old_count = arr->count;
+    edge* filtered = malloc(old_count * sizeof(edge));
+    if (!filtered)
+        return;
+    int keep = 0;
+    for (int i = 0; i < old_count; i++) {
+        edge* current = &old[i];
+        if (edge_length(current) < MIN_EDGE_LENGTH)
+            continue;
+        int dup = 0;
+        int limit = MAX_DUP_CHECK;
+        for (int j = keep - 1; j >= 0 && limit > 0; j--, limit--) {
+            if (edges_similar(&filtered[j], current)) {
+                dup = 1;
+                break;
+            }
+        }
+        if (dup)
+            continue;
+        filtered[keep++] = *current;
+    }
+    free(old);
+    arr->items = filtered;
+    arr->count = keep;
+    arr->capacity = keep;
+}
+
+static int is_ascii_letter(int c)
+{
+    return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
+}
+
+static int is_italic_shear_candidate(const fz_stext_char* ch)
+{
+    if (!ch)
+        return 0;
+
+    float left_h = ch->quad.ul.y - ch->quad.ll.y;
+    float right_h = ch->quad.ur.y - ch->quad.lr.y;
+    if (left_h < 0) left_h = -left_h;
+    if (right_h < 0) right_h = -right_h;
+    float h = (left_h + right_h) * 0.5f;
+    if (h < 1e-3f)
+        return 0;
+
+    float left_dx = (ch->quad.ul.x - ch->quad.ll.x) / h;
+    float right_dx = (ch->quad.ur.x - ch->quad.lr.x) / h;
+
+    if ((left_dx > 0 && right_dx < 0) || (left_dx < 0 && right_dx > 0))
+        return 0;
+
+    float shear = (left_dx + right_dx) * 0.5f;
+    if (shear < 0) shear = -shear;
+
+    return shear >= 0.24f && shear <= 0.55f;
+}
+
 static void write_all_char_data(FILE* out, fz_context* ctx, fz_stext_page* stext, int expected_total)
 {
     int written = 0;
+    fchar* line_buffer = NULL;
+    size_t line_buffer_capacity = 0;
+    uint8_t* italic_candidate = NULL;
+    size_t italic_capacity = 0;
+
     for (fz_stext_block* block = stext->first_block; block; block = block->next)
     {
         if (block->type != FZ_STEXT_BLOCK_TEXT)
             continue;
         for (fz_stext_line* line = block->u.t.first_line; line; line = line->next)
         {
+            int line_chars = 0;
             for (fz_stext_char* ch = line->first_char; ch; ch = ch->next)
             {
+                size_t required = (size_t)line_chars + 1;
+                if (required > line_buffer_capacity)
+                {
+                    size_t new_capacity = line_buffer_capacity ? line_buffer_capacity * 2 : 256;
+                    while (new_capacity < required)
+                        new_capacity *= 2;
+                    fchar* resized = realloc(line_buffer, new_capacity * sizeof(fchar));
+                    if (!resized)
+                        break;
+                    line_buffer = resized;
+                    line_buffer_capacity = new_capacity;
+                }
+                if (required > italic_capacity)
+                {
+                    size_t new_capacity = italic_capacity ? italic_capacity * 2 : 256;
+                    while (new_capacity < required)
+                        new_capacity *= 2;
+                    uint8_t* resized = realloc(italic_candidate, new_capacity * sizeof(uint8_t));
+                    if (!resized)
+                        break;
+                    italic_candidate = resized;
+                    italic_capacity = new_capacity;
+                }
+
                 fchar rc = {0};
                 rc.codepoint = ch->c;
                 rc.size = ch->size;
 
-                // Determine bbox from the character's quad
                 float x0 = ch->quad.ll.x;
                 float y0 = ch->quad.ll.y;
                 float x1 = ch->quad.ur.x;
                 float y1 = ch->quad.ur.y;
-                // Ensure proper min/max ordering
                 rc.bbox_x0 = x0 < x1 ? x0 : x1;
                 rc.bbox_y0 = y0 < y1 ? y0 : y1;
                 rc.bbox_x1 = x0 > x1 ? x0 : x1;
                 rc.bbox_y1 = y0 > y1 ? y0 : y1;
 
                 unsigned char flags = get_font_flags(ctx, ch->font);
-                rc.is_bold = (flags & 1) ? 1 : 0;
+                rc.is_bold = (flags & 1) || (ch->flags & FZ_STEXT_BOLD) ? 1 : 0;
                 rc.is_italic = (flags & 2) ? 1 : 0;
                 rc.is_monospaced = (flags & 4) ? 1 : 0;
 
-                fwrite(&rc, sizeof(fchar), 1, out);
-                written++;
+                line_buffer[line_chars] = rc;
+                italic_candidate[line_chars] = (rc.is_italic == 0 && is_italic_shear_candidate(ch)) ? 1 : 0;
+                line_chars++;
             }
+            if (line_chars == 0)
+                continue;
+
+            for (int i = 0; i < line_chars; )
+            {
+                if (!italic_candidate[i])
+                {
+                    i++;
+                    continue;
+                }
+                int start = i;
+                int run_len = 0;
+                int letter_count = 0;
+                while (i < line_chars && italic_candidate[i])
+                {
+                    if (is_ascii_letter(line_buffer[i].codepoint))
+                        letter_count++;
+                    run_len++;
+                    i++;
+                }
+                if (run_len >= 8 && letter_count >= 7)
+                {
+                    for (int j = start; j < i; j++)
+                        line_buffer[j].is_italic = 1;
+                }
+            }
+
+            fwrite(line_buffer, sizeof(fchar), (size_t)line_chars, out);
+            written += line_chars;
         }
     }
-    (void)expected_total; // could assert match
+
+    free(line_buffer);
+    free(italic_candidate);
+    (void)expected_total;
 }
 
 static int count_links(fz_link* links) {
@@ -456,6 +661,7 @@ static int extract_page_to_file(fz_context* ctx, fz_document* doc, int page_num,
         }
 
         int page_number = page_num + 1;
+        filter_edges(&edges);
         fwrite(&page_number, sizeof(int), 1, out);
         fwrite(&bounds, sizeof(fz_rect), 1, out);
         fwrite(&total_blocks, sizeof(int), 1, out);
@@ -523,11 +729,6 @@ char* extract_all_pages(const char* pdf_path)
     snprintf(temp_dir, 256, ".pymupdfllm_c_%ld_%u", (long)time(NULL), (unsigned)getpid());
     mkdir(temp_dir, 0755);
 
-    if (init_shared_font_cache() != 0) {
-        free(temp_dir);
-        return NULL;
-    }
-
     fz_context* ctx = fz_new_context(NULL, NULL, FZ_STORE_SIZE);
     fz_set_warning_callback(ctx, mupdf_warning_callback, NULL);
     fz_set_error_callback(ctx, mupdf_error_callback, NULL);
@@ -570,9 +771,43 @@ char* extract_all_pages(const char* pdf_path)
     if (num_workers <= 0)
         num_workers = 4;
 
-    int threshold = (10 > num_workers * 2) ? 10 : num_workers * 2;
+    if (num_workers > page_count)
+        num_workers = page_count;
+
+    int target_workers = (page_count + 2) / 3;
+    if (page_count >= 2 && target_workers < 2)
+        target_workers = 2;
+    if (target_workers > 0 && target_workers < num_workers)
+        num_workers = target_workers;
+    if (page_count < 64 && num_workers > 8)
+        num_workers = 8;
+
+    int threshold = 2;
     if (page_count < threshold) {
         num_workers = 1;  /* force sequential */
+    }
+
+    if (num_workers == 1) {
+        for (int p = 0; p < page_count; p++) {
+            char filename[512];
+            snprintf(filename, sizeof(filename), "%s/page_%03d.raw", temp_dir, p + 1);
+            if (extract_page_to_file(ctx, doc, p, filename) != 0) {
+                fprintf(stderr, "Warning: failed to extract page %d\n", p + 1);
+            }
+        }
+
+        if (doc)
+            fz_drop_document(ctx, doc);
+        fz_drop_context(ctx);
+        return temp_dir;
+    }
+
+    if (init_shared_font_cache() != 0) {
+        if (doc)
+            fz_drop_document(ctx, doc);
+        fz_drop_context(ctx);
+        free(temp_dir);
+        return NULL;
     }
 
     pid_t* pids = calloc(num_workers, sizeof(pid_t));
