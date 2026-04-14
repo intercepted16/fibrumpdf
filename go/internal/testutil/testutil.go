@@ -1,8 +1,11 @@
 package testutil
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/fibrumpdf/go/internal/raw"
 )
 
 var TestDataDir string
@@ -29,4 +32,20 @@ func FindProjectRoot() string {
 		}
 		cwd = parent
 	}
+}
+
+func ExtractRawFromTestData(pdfName string) (string, error) {
+	if TestDataDir == "" {
+		return "", fmt.Errorf("extractRaw: no TestDataDir")
+	}
+	pdfPath := filepath.Join(TestDataDir, pdfName)
+	if _, err := os.Stat(pdfPath); err != nil {
+		return "", err
+	}
+
+	tempDir, err := raw.ExtractAllPagesRaw(pdfPath)
+	if err != nil {
+		return "", err
+	}
+	return tempDir, nil
 }

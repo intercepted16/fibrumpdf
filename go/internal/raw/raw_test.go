@@ -1,71 +1,34 @@
-package bridge
+package raw_test
 
 import (
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/fibrumpdf/go/internal/logger"
+	"github.com/fibrumpdf/go/internal/raw"
+	"github.com/fibrumpdf/go/internal/testutil"
 )
 
-var testPdfPath string
+var Logger = logger.GetLogger("rawTest")
 
-const deleteTempDir = true
-
-func init() {
-	testPdfPath = findProjectRoot()
-	if testPdfPath != "" {
-		testPdfPath = filepath.Join(testPdfPath, "test_data", "pdfs", "nist.pdf")
-	}
-}
-
-func findProjectRoot() string {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return ""
-	}
-	for {
-		rootMarker := filepath.Join(cwd, ".root")
-		if _, err := os.Stat(rootMarker); err == nil {
-			return cwd
-		}
-		parent := filepath.Dir(cwd)
-		if parent == cwd {
-			return ""
-		}
-		cwd = parent
-	}
-}
-
-func TestExtractAndAnalyze(t *testing.T) {
-	if testPdfPath == "" {
-		t.Fatal("could not find project root (.root file)")
-	}
-
-	if _, err := os.Stat(testPdfPath); err != nil {
-		t.Fatalf("test PDF not found at %s: %v", testPdfPath, err)
-	}
-
-	tempDir, err := ExtractAllPagesRaw(testPdfPath)
+func TestRawExtraction(t *testing.T) {
+	tempDir, err := testutil.ExtractRawFromTestData("nist.pdf")
 	if err != nil {
 		t.Fatalf("extraction failed: %v", err)
 	}
+
 	Logger.Info("extraction temp dir", "path", tempDir)
 
-	if deleteTempDir {
-		defer os.RemoveAll(tempDir)
-	}
-
-	files, err := os.ReadDir(tempDir)
+	pageFiles, err := os.ReadDir(tempDir)
 	if err != nil {
 		t.Fatalf("failed to read temp dir: %v", err)
 	}
 
-	var pageFiles []string
-	for _, f := range files {
-		if strings.HasSuffix(f.Name(), ".raw") {
-			pageFiles = append(pageFiles, f.Name())
-		}
-	}
+	t.Cleanup(func() {
+		defer os.RemoveAll(tempDir)
+	})
 
 	if len(pageFiles) == 0 {
 		t.Fatal("no .raw files extracted")
@@ -73,10 +36,10 @@ func TestExtractAndAnalyze(t *testing.T) {
 	Logger.Info("extracted pages", "count", len(pageFiles))
 
 	var totalChars, totalWords, totalEdges, totalBoldChars, totalItalicChars int
-	var medianPageData *RawPageData
+	var medianPageData *raw.PageData
 
-	for i, pageFile := range pageFiles {
-		data, err := ReadRawPage(filepath.Join(tempDir, pageFile))
+	for _, pageFile := range pageFiles {
+		data, err := raw.ReadRawPage(filepath.Join(tempDir, pageFile.Name()))
 		if err != nil {
 			Logger.Info("warning: failed to read page", "file", pageFile, "error", err)
 			continue
@@ -105,14 +68,7 @@ func TestExtractAndAnalyze(t *testing.T) {
 			}
 		}
 		totalWords += wordCount
-
-		if i == len(pageFiles)/2 {
-			medianPageData = data
-		}
 	}
-
-	pdfStat, _ := os.Stat(testPdfPath)
-	fileSizeMB := float64(pdfStat.Size()) / (1024 * 1024)
 
 	var boldPercent, italicPercent float64
 	if totalChars > 0 {
@@ -123,9 +79,7 @@ func TestExtractAndAnalyze(t *testing.T) {
 	textSnippet := ""
 	if medianPageData != nil && len(medianPageData.Chars) > 0 {
 		snippetLen := 100
-		if len(medianPageData.Chars) < snippetLen {
-			snippetLen = len(medianPageData.Chars)
-		}
+		snippetLen = min(snippetLen, len(medianPageData.Chars))
 		var sb strings.Builder
 		for i := 0; i < snippetLen; i++ {
 			sb.WriteRune(medianPageData.Chars[i].Codepoint)
@@ -136,9 +90,7 @@ func TestExtractAndAnalyze(t *testing.T) {
 		}
 	}
 
-	Logger.Info("file", "name", filepath.Base(testPdfPath))
-	Logger.Info("size", "mb", fileSizeMB)
-	Logger.Info("pages", "count", len(pageFiles))
+	Logger.Info("file", "name", "nist.pdf")
 	Logger.Info("content stats")
 	Logger.Info("total characters", "count", totalChars)
 	Logger.Info("total words", "count", totalWords)

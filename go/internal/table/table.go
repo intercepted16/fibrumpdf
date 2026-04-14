@@ -5,10 +5,10 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/fibrumpdf/go/internal/bridge"
 	"github.com/fibrumpdf/go/internal/geometry"
 	"github.com/fibrumpdf/go/internal/logger"
 	"github.com/fibrumpdf/go/internal/models"
+	rawdata "github.com/fibrumpdf/go/internal/raw"
 	"github.com/tidwall/rtree"
 )
 
@@ -447,14 +447,14 @@ func filterValid(tables *TableArray, pageRect geometry.Rect) {
 	tables.Tables = valid
 }
 
-func ShrinkCellsToContent(tables *TableArray, chars []bridge.RawChar) {
+func ShrinkCellsToContent(tables *TableArray, chars []rawdata.Char) {
 	if tables == nil || len(chars) == 0 {
 		return
 	}
 	for ti := range tables.Tables {
 		tbl := &tables.Tables[ti]
 		rect := tbl.BBox
-		var tblChars []bridge.RawChar
+		var tblChars []rawdata.Char
 		for _, ch := range chars {
 			if ch.BBox.X0 < rect.X1+2 && ch.BBox.X1 > rect.X0-2 && ch.BBox.Y0 < rect.Y1+2 && ch.BBox.Y1 > rect.Y0-2 {
 				tblChars = append(tblChars, ch)
@@ -599,7 +599,7 @@ func isPunctOrDigit(r rune) bool {
 	return r == '.' || r == ',' || r == '$' || r == '%' || r == ':' || r == ';' || r == '\'' || r == '"' || r == '-' || r == '(' || r == ')' || (r >= '0' && r <= '9')
 }
 
-func extractTextInRect(raw *bridge.RawPageData, rect geometry.Rect) string {
+func extractTextInRect(raw *rawdata.PageData, rect geometry.Rect) string {
 	var buf strings.Builder
 	var prevX1, prevY0 float32 = -1000, -1000
 	var prevR rune
@@ -637,7 +637,7 @@ func extractTextInRect(raw *bridge.RawPageData, rect geometry.Rect) string {
 	return cleaned.String()
 }
 
-func extractTextIntoCells(raw *bridge.RawPageData, tables *TableArray) {
+func extractTextIntoCells(raw *rawdata.PageData, tables *TableArray) {
 	if tables == nil {
 		return
 	}
@@ -707,7 +707,7 @@ func normalizeHeaderRow(rows *[]models.TableRow) {
 	}
 }
 
-func ExtractAndConvertTables(raw *bridge.RawPageData) []models.Block {
+func ExtractAndConvertTables(raw *rawdata.PageData) []models.Block {
 	if len(raw.Edges) == 0 {
 		return nil
 	}
@@ -739,14 +739,14 @@ func ExtractAndConvertTables(raw *bridge.RawPageData) []models.Block {
 	return blocks
 }
 
-func detectTables(bridgeEdges []bridge.Edge, pageRect geometry.Rect, pageNum int) *TableArray {
+func detectTables(bridgeEdges []rawdata.Edge, pageRect geometry.Rect, pageNum int) *TableArray {
 	if len(bridgeEdges) == 0 {
 		return nil
 	}
 	var hEdges, vEdges []Edge
 	for _, e := range bridgeEdges {
-		edge := Edge{X0: e.X0, Y0: e.Y0, X1: e.X1, Y1: e.Y1, Orientation: e.Orientation}
-		if e.Orientation == 'h' {
+		edge := Edge{X0: e.X0, Y0: e.Y0, X1: e.X1, Y1: e.Y1, Orientation: byte(e.Orientation)}
+		if e.Orientation == rawdata.EdgeHorizontal {
 			hEdges = append(hEdges, edge)
 		} else {
 			vEdges = append(vEdges, edge)

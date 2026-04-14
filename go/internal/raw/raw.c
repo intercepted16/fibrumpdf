@@ -4,8 +4,8 @@
 // so, use one function that writes to disk instead, much less overhead.
 // this is mostly pre existing logic just written to be used via Go.
 // additionally, the raw 'binary' format is used for performance and less disk usage. json gets very taxing on thousands of chars.
-
-#include "bridge.h"
+//
+#include "raw.h"
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
@@ -21,7 +21,7 @@
 
 #define EDGE_MIN_LENGTH 3.0
 #define EDGE_MAX_WIDTH 3.0
-#define FZ_STORE_SIZE 256 * 1024 * 1024
+#define FZ_STORE_SIZE 32 * 1024 * 1024 // 32MB
 #define MIN_EDGE_LENGTH 6.0
 #define EDGE_DUP_TOL 0.35
 #define MAX_DUP_CHECK 48
@@ -30,7 +30,7 @@ typedef struct
 {
     fz_device super;
     fz_device* stext_dev;  
-    edge_array* edges;
+    fz_buffer* edges_buf;
 } combined_device;
 
 typedef struct {
@@ -38,9 +38,7 @@ typedef struct {
     unsigned char flags;
 } font_cache_entry;
 
-/* Shared font cache across all fork processes.
-   Uses process-shared mutex to synchronize access between workers.
-   Persists across all pages and all workers to maximize cache reuse. */
+
 #define FONT_CACHE_SIZE 256
 typedef struct {
     pthread_mutex_t lock;
@@ -167,24 +165,10 @@ static void mupdf_error_callback(void* user, const char* message) {
     (void)message;
 }
 
-static void add_edge(edge_array* arr, double x0, double y0, double x1, double y1, char orientation)
+static void add_edge(fz_context* ctx, fz_buffer* buf, double x0, double y0, double x1, double y1, char orientation)
 {
-    if (arr->count >= arr->capacity)
-    {
-        int new_cap = arr->capacity == 0 ? 64 : arr->capacity * 2;
-        edge* new_items = realloc(arr->items, new_cap * sizeof(edge));
-        if (!new_items)
-            return;
-        arr->items = new_items;
-        arr->capacity = new_cap;
-    }
-
-    edge* e = &arr->items[arr->count++];
-    e->x0 = x0;
-    e->y0 = y0;
-    e->x1 = x1;
-    e->y1 = y1;
-    e->orientation = orientation;
+    edge e = {x0, y0, x1, y1, orientation};
+    fz_append_data(ctx, buf, &e, sizeof(edge));
 }
 
 static void combined_fill_path(fz_context* ctx, fz_device* dev, const fz_path* path, int even_odd, fz_matrix ctm,
@@ -198,10 +182,10 @@ static void combined_fill_path(fz_context* ctx, fz_device* dev, const fz_path* p
 
     if (width > 0 && height > 0)
     {
-        add_edge(cdev->edges, bbox.x0, bbox.y0, bbox.x1, bbox.y0, 'h');
-        add_edge(cdev->edges, bbox.x0, bbox.y1, bbox.x1, bbox.y1, 'h');
-        add_edge(cdev->edges, bbox.x0, bbox.y0, bbox.x0, bbox.y1, 'v');
-        add_edge(cdev->edges, bbox.x1, bbox.y0, bbox.x1, bbox.y1, 'v');
+        add_edge(ctx, cdev->edges_buf, bbox.x0, bbox.y0, bbox.x1, bbox.y0, 'h');
+        add_edge(ctx, cdev->edges_buf, bbox.x0, bbox.y1, bbox.x1, bbox.y1, 'h');
+        add_edge(ctx, cdev->edges_buf, bbox.x0, bbox.y0, bbox.x0, bbox.y1, 'v');
+        add_edge(ctx, cdev->edges_buf, bbox.x1, bbox.y0, bbox.x1, bbox.y1, 'v');
     }
 
     if (cdev->stext_dev && cdev->stext_dev->fill_path)
@@ -220,9 +204,9 @@ static void combined_stroke_path(fz_context* ctx, fz_device* dev, const fz_path*
         double height = bbox.y1 - bbox.y0;
 
         if (height <= EDGE_MAX_WIDTH && width >= EDGE_MIN_LENGTH)
-            add_edge(cdev->edges, bbox.x0, bbox.y0, bbox.x1, bbox.y0, 'h');
+            add_edge(ctx, cdev->edges_buf, bbox.x0, bbox.y0, bbox.x1, bbox.y0, 'h');
         else if (width <= EDGE_MAX_WIDTH && height >= EDGE_MIN_LENGTH)
-            add_edge(cdev->edges, bbox.x0, bbox.y0, bbox.x0, bbox.y1, 'v');
+            add_edge(ctx, cdev->edges_buf, bbox.x0, bbox.y0, bbox.x0, bbox.y1, 'v');
     }
 
     if (cdev->stext_dev && cdev->stext_dev->stroke_path)
@@ -260,59 +244,6 @@ static void combined_clip_stroke_text(fz_context* ctx, fz_device* dev, const fz_
         cdev->stext_dev->clip_stroke_text(ctx, cdev->stext_dev, text, stroke, ctm, scissor);
 }
 
-static void combined_ignore_text(fz_context* ctx, fz_device* dev, const fz_text* text, fz_matrix ctm)
-{
-    combined_device* cdev = (combined_device*)dev;
-    if (cdev->stext_dev && cdev->stext_dev->ignore_text)
-        cdev->stext_dev->ignore_text(ctx, cdev->stext_dev, text, ctm);
-}
-
-static void combined_fill_shade(fz_context* ctx, fz_device* dev, fz_shade* shd, fz_matrix ctm, float alpha, fz_color_params cp)
-{
-    (void)ctx;
-    (void)dev;
-    (void)shd;
-    (void)ctm;
-    (void)alpha;
-    (void)cp;
-}
-
-static void combined_fill_image(fz_context* ctx, fz_device* dev, fz_image* img, fz_matrix ctm, float alpha, fz_color_params cp)
-{
-    (void)ctx;
-    (void)dev;
-    (void)img;
-    (void)ctm;
-    (void)alpha;
-    (void)cp;
-}
-
-static void combined_fill_image_mask(fz_context* ctx, fz_device* dev, fz_image* img, fz_matrix ctm,
-                                     fz_colorspace* cs, const float* color, float alpha, fz_color_params cp)
-{
-    (void)ctx;
-    (void)dev;
-    (void)img;
-    (void)ctm;
-    (void)cs;
-    (void)color;
-    (void)alpha;
-    (void)cp;
-}
-
-static void combined_begin_metatext(fz_context* ctx, fz_device* dev, fz_metatext meta, const char* text)
-{
-    combined_device* cdev = (combined_device*)dev;
-    if (cdev->stext_dev && cdev->stext_dev->begin_metatext)
-        cdev->stext_dev->begin_metatext(ctx, cdev->stext_dev, meta, text);
-}
-
-static void combined_end_metatext(fz_context* ctx, fz_device* dev)
-{
-    combined_device* cdev = (combined_device*)dev;
-    if (cdev->stext_dev && cdev->stext_dev->end_metatext)
-        cdev->stext_dev->end_metatext(ctx, cdev->stext_dev);
-}
 
 static void combined_close_device(fz_context* ctx, fz_device* dev)
 {
@@ -326,16 +257,6 @@ static void combined_drop_device(fz_context* ctx, fz_device* dev)
     combined_device* cdev = (combined_device*)dev;
     if (cdev->stext_dev)
         fz_drop_device(ctx, cdev->stext_dev);
-}
-
-static void free_edge_array(edge_array* edges)
-{
-    if (!edges)
-        return;
-    free(edges->items);
-    edges->items = NULL;
-    edges->count = 0;
-    edges->capacity = 0;
 }
 
 static double edge_length(const edge* e)
@@ -361,15 +282,24 @@ static int edges_similar(const edge* a, const edge* b)
     return 1;
 }
 
-static void filter_edges(edge_array* arr)
+static void filter_edges(fz_context* ctx, fz_buffer* buf)
 {
-    if (!arr || arr->count <= 0)
+    if (!buf)
         return;
-    edge* old = arr->items;
-    int old_count = arr->count;
+    
+    size_t data_len = 0;
+    unsigned char* data = NULL;
+    data_len = fz_buffer_storage(ctx, buf, &data);
+    int old_count = (int)(data_len / sizeof(edge));
+    
+    if (old_count <= 0)
+        return;
+    
+    edge* old = (edge*)data;
     edge* filtered = malloc(old_count * sizeof(edge));
     if (!filtered)
         return;
+    
     int keep = 0;
     for (int i = 0; i < old_count; i++) {
         edge* current = &old[i];
@@ -387,10 +317,10 @@ static void filter_edges(edge_array* arr)
             continue;
         filtered[keep++] = *current;
     }
-    free(old);
-    arr->items = filtered;
-    arr->count = keep;
-    arr->capacity = keep;
+    
+    fz_clear_buffer(ctx, buf);
+    fz_append_data(ctx, buf, filtered, keep * sizeof(edge));
+    free(filtered);
 }
 
 static int is_ascii_letter(int c)
@@ -423,7 +353,7 @@ static int is_italic_shear_candidate(const fz_stext_char* ch)
     return shear >= 0.24f && shear <= 0.55f;
 }
 
-static void write_all_char_data(FILE* out, fz_context* ctx, fz_stext_page* stext, int expected_total)
+static void write_all_char_data(fz_buffer* buf, fz_context* ctx, fz_stext_page* stext, int expected_total)
 {
     int written = 0;
     fchar* line_buffer = NULL;
@@ -513,7 +443,7 @@ static void write_all_char_data(FILE* out, fz_context* ctx, fz_stext_page* stext
                 }
             }
 
-            fwrite(line_buffer, sizeof(fchar), (size_t)line_chars, out);
+            fz_append_data(ctx, buf, line_buffer, (size_t)line_chars * sizeof(fchar));
             written += line_chars;
         }
     }
@@ -537,7 +467,8 @@ static int extract_page_to_file(fz_context* ctx, fz_document* doc, int page_num,
     fz_link* page_links = NULL;
     FILE* out = NULL;
     int status = 0;
-    edge_array edges = {0};
+    fz_buffer* edges_buf = NULL;
+    fz_buffer* output_buf = NULL;
     fz_device* combined_dev = NULL;
 
     fz_try(ctx)
@@ -554,10 +485,12 @@ static int extract_page_to_file(fz_context* ctx, fz_document* doc, int page_num,
 
         fz_device* stext_dev = fz_new_stext_device(ctx, stext, &opts);
 
+        edges_buf = fz_new_buffer(ctx, 256 * 1024);
+
         combined_device* cdev = fz_new_derived_device(ctx, combined_device);
         combined_dev = &cdev->super;
         cdev->stext_dev = stext_dev;
-        cdev->edges = &edges;
+        cdev->edges_buf = edges_buf;
 
         combined_dev->close_device = combined_close_device;
         combined_dev->drop_device = combined_drop_device;
@@ -567,12 +500,6 @@ static int extract_page_to_file(fz_context* ctx, fz_document* doc, int page_num,
         combined_dev->stroke_text = combined_stroke_text;
         combined_dev->clip_text = combined_clip_text;
         combined_dev->clip_stroke_text = combined_clip_stroke_text;
-        combined_dev->ignore_text = combined_ignore_text;
-        combined_dev->fill_shade = combined_fill_shade;
-        combined_dev->fill_image = combined_fill_image;
-        combined_dev->fill_image_mask = combined_fill_image_mask;
-        combined_dev->begin_metatext = combined_begin_metatext;
-        combined_dev->end_metatext = combined_end_metatext;
 
         fz_run_page_contents(ctx, page, combined_dev, fz_identity, NULL);
         fz_close_device(ctx, combined_dev);
@@ -582,113 +509,101 @@ static int extract_page_to_file(fz_context* ctx, fz_document* doc, int page_num,
             fz_throw(ctx, FZ_ERROR_GENERIC, "cannot open output file");
         setvbuf(out, NULL, _IOFBF, 256 * 1024);
 
-        int total_blocks = 0, total_lines = 0, total_chars = 0;
-        int blocks_capacity = 64, lines_capacity = 256;
-        fblock* blocks_buffer = malloc(blocks_capacity * sizeof(fblock));
-        fline* lines_buffer = malloc(lines_capacity * sizeof(fline));
+        output_buf = fz_new_buffer(ctx, 512 * 1024);
 
-        if (!blocks_buffer || !lines_buffer)
-        {
-            free(blocks_buffer);
-            free(lines_buffer);
-            fz_throw(ctx, FZ_ERROR_GENERIC, "cannot allocate buffers");
-        }
+        int total_blocks = 0, total_lines = 0, total_chars = 0;
+        fblock* blocks_buffer = NULL;
+        fline* lines_buffer = NULL;
+        fz_buffer* blocks_buf = fz_new_buffer(ctx, 256 * 1024);
+        fz_buffer* lines_buf = fz_new_buffer(ctx, 256 * 1024);
 
         int line_idx = 0;
         int char_idx = 0;
 
         for (fz_stext_block* block = stext->first_block; block; block = block->next)
         {
-
-            if (total_blocks >= blocks_capacity)
-            {
-                blocks_capacity *= 2;
-                fblock* new_blocks = realloc(blocks_buffer, blocks_capacity * sizeof(fblock));
-                if (!new_blocks)
-                {
-                    free(blocks_buffer);
-                    free(lines_buffer);
-                    fz_throw(ctx, FZ_ERROR_GENERIC, "cannot realloc blocks");
-                }
-                blocks_buffer = new_blocks;
-            }
-
-            fblock* rb = &blocks_buffer[total_blocks++];
-            rb->type = block->type;
-            rb->bbox_x0 = block->bbox.x0;
-            rb->bbox_y0 = block->bbox.y0;
-            rb->bbox_x1 = block->bbox.x1;
-            rb->bbox_y1 = block->bbox.y1;
-            rb->line_start = line_idx;
-            rb->line_count = 0;
+            fblock rb = {0};
+            rb.type = block->type;
+            rb.bbox_x0 = block->bbox.x0;
+            rb.bbox_y0 = block->bbox.y0;
+            rb.bbox_x1 = block->bbox.x1;
+            rb.bbox_y1 = block->bbox.y1;
+            rb.line_start = line_idx;
+            rb.line_count = 0;
 
             if (block->type == FZ_STEXT_BLOCK_TEXT)
             {
                 for (fz_stext_line* line = block->u.t.first_line; line; line = line->next)
                 {
-
-                    if (total_lines >= lines_capacity)
-                    {
-                        lines_capacity *= 2;
-                        fline* new_lines = realloc(lines_buffer, lines_capacity * sizeof(fline));
-                        if (!new_lines)
-                        {
-                            free(blocks_buffer);
-                            free(lines_buffer);
-                            fz_throw(ctx, FZ_ERROR_GENERIC, "cannot realloc lines");
-                        }
-                        lines_buffer = new_lines;
-                    }
-
-                    rb->line_count++;
-                    fline* rl = &lines_buffer[total_lines++];
-                    rl->bbox_x0 = line->bbox.x0;
-                    rl->bbox_y0 = line->bbox.y0;
-                    rl->bbox_x1 = line->bbox.x1;
-                    rl->bbox_y1 = line->bbox.y1;
-                    rl->char_start = char_idx;
-                    rl->char_count = 0;
+                    rb.line_count++;
+                    fline rl = {0};
+                    rl.bbox_x0 = line->bbox.x0;
+                    rl.bbox_y0 = line->bbox.y0;
+                    rl.bbox_x1 = line->bbox.x1;
+                    rl.bbox_y1 = line->bbox.y1;
+                    rl.char_start = char_idx;
+                    rl.char_count = 0;
 
                     for (fz_stext_char* ch = line->first_char; ch; ch = ch->next)
                     {
-                        rl->char_count++;
+                        rl.char_count++;
                         total_chars++;
                     }
-                    char_idx += rl->char_count;
+                    char_idx += rl.char_count;
+                    
+                    fz_append_data(ctx, lines_buf, &rl, sizeof(fline));
+                    total_lines++;
                 }
-                line_idx += rb->line_count;
+                line_idx += rb.line_count;
             }
+            
+            fz_append_data(ctx, blocks_buf, &rb, sizeof(fblock));
+            total_blocks++;
         }
 
         int page_number = page_num + 1;
-        filter_edges(&edges);
-        fwrite(&page_number, sizeof(int), 1, out);
-        fwrite(&bounds, sizeof(fz_rect), 1, out);
-        fwrite(&total_blocks, sizeof(int), 1, out);
-        fwrite(&total_lines, sizeof(int), 1, out);
-        fwrite(&total_chars, sizeof(int), 1, out);
-        fwrite(&edges.count, sizeof(int), 1, out);
-        fwrite(&link_count, sizeof(int), 1, out);
+        filter_edges(ctx, edges_buf);
+        
+        fz_append_data(ctx, output_buf, &page_number, sizeof(int));
+        fz_append_data(ctx, output_buf, &bounds, sizeof(fz_rect));
+        fz_append_data(ctx, output_buf, &total_blocks, sizeof(int));
+        fz_append_data(ctx, output_buf, &total_lines, sizeof(int));
+        fz_append_data(ctx, output_buf, &total_chars, sizeof(int));
+        
+        unsigned char* edges_data = NULL;
+        size_t edges_len = fz_buffer_storage(ctx, edges_buf, &edges_data);
+        int edges_count = (int)(edges_len / sizeof(edge));
+        fz_append_data(ctx, output_buf, &edges_count, sizeof(int));
+        fz_append_data(ctx, output_buf, &link_count, sizeof(int));
 
-        fwrite(blocks_buffer, sizeof(fblock), total_blocks, out);
-        fwrite(lines_buffer, sizeof(fline), total_lines, out);
+        unsigned char* blocks_data = NULL;
+        size_t blocks_len = fz_buffer_storage(ctx, blocks_buf, &blocks_data);
+        fz_append_data(ctx, output_buf, blocks_data, blocks_len);
+        
+        unsigned char* lines_data = NULL;
+        size_t lines_len = fz_buffer_storage(ctx, lines_buf, &lines_data);
+        fz_append_data(ctx, output_buf, lines_data, lines_len);
 
-        free(blocks_buffer);
-        free(lines_buffer);
+        write_all_char_data(output_buf, ctx, stext, total_chars);
 
-        write_all_char_data(out, ctx, stext, total_chars);
-
-        if (edges.count > 0)
-            fwrite(edges.items, sizeof(edge), edges.count, out);
+        fz_append_data(ctx, output_buf, edges_data, edges_len);
 
         for (fz_link* l = page_links; l; l = l->next) {
-            fwrite(&l->rect, sizeof(fz_rect), 1, out);
+            fz_append_data(ctx, output_buf, &l->rect, sizeof(fz_rect));
             const char* uri = l->uri ? l->uri : "";
             int uri_len = strlen(uri);
-            fwrite(&uri_len, sizeof(int), 1, out);
+            fz_append_data(ctx, output_buf, &uri_len, sizeof(int));
             if (uri_len > 0)
-                fwrite(uri, 1, uri_len, out);
+                fz_append_data(ctx, output_buf, uri, uri_len);
         }
+
+        unsigned char* total_data = NULL;
+        size_t total_len = fz_buffer_storage(ctx, output_buf, &total_data);
+        if (fwrite(total_data, 1, total_len, out) != total_len)
+            fz_throw(ctx, FZ_ERROR_GENERIC, "failed to write output file");
+
+        fz_drop_buffer(ctx, blocks_buf);
+        fz_drop_buffer(ctx, lines_buf);
 
         fclose(out);
         out = NULL;
@@ -706,7 +621,10 @@ static int extract_page_to_file(fz_context* ctx, fz_document* doc, int page_num,
             fz_drop_stext_page(ctx, stext);
         if (page)
             fz_drop_page(ctx, page);
-        free_edge_array(&edges);
+        if (edges_buf)
+            fz_drop_buffer(ctx, edges_buf);
+        if (output_buf)
+            fz_drop_buffer(ctx, output_buf);
     }
     fz_catch(ctx)
     {
@@ -719,6 +637,8 @@ static int extract_page_to_file(fz_context* ctx, fz_document* doc, int page_num,
 /* extract_page_range helper removed: superseded by forked workers using round-robin distribution */
 char* extract_all_pages(const char* pdf_path)
 {
+    struct timespec t0, t1, t2;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
     if (!pdf_path)
         return NULL;
 
@@ -726,7 +646,7 @@ char* extract_all_pages(const char* pdf_path)
     if (!temp_dir)
         return NULL;
 
-    snprintf(temp_dir, 256, ".pymupdfllm_c_%ld_%u", (long)time(NULL), (unsigned)getpid());
+    snprintf(temp_dir, 256, ".fibrum_pdf_%ld_%u", (long)time(NULL), (unsigned)getpid());
     mkdir(temp_dir, 0755);
 
     fz_context* ctx = fz_new_context(NULL, NULL, FZ_STORE_SIZE);
@@ -762,12 +682,6 @@ char* extract_all_pages(const char* pdf_path)
     }
 
     int num_workers = sysconf(_SC_NPROCESSORS_ONLN);
-    const char *workers_env = getenv("PYMUPDF_WORKERS");
-    if (workers_env && workers_env[0] != '\0') {
-        long w = strtol(workers_env, NULL, 10);
-        if (w > 0)
-            num_workers = (int)w;
-    }
     if (num_workers <= 0)
         num_workers = 4;
 
@@ -850,13 +764,8 @@ char* extract_all_pages(const char* pdf_path)
                 _exit(1);
             }
 
-            /* optional child profiling */
-            const char* child_prof = getenv("PYMUPDF_PROFILE");
-            int child_do_profile = (child_prof && child_prof[0] != '\0') ? 1 : 0;
-            struct timespec child_t0, child_t1;
             int pages_processed = 0;
-            if (child_do_profile)
-                clock_gettime(CLOCK_MONOTONIC, &child_t0);
+
 
             for (int p = start; p < page_count; p += num_workers) {
                 char filename[512];
@@ -864,12 +773,6 @@ char* extract_all_pages(const char* pdf_path)
                 if (extract_page_to_file(child_ctx, child_doc, p, filename) != 0)
                     fprintf(stderr, "Warning: failed to extract page %d\n", p + 1);
                 pages_processed++;
-            }
-
-            if (child_do_profile) {
-                clock_gettime(CLOCK_MONOTONIC, &child_t1);
-                double sec = (child_t1.tv_sec - child_t0.tv_sec) + (child_t1.tv_nsec - child_t0.tv_nsec) * 1e-9;
-                fprintf(stderr, "CHILD PROFILE pid=%d pages=%d total=%.3f s\n", (int)getpid(), pages_processed, sec);
             }
 
             if (child_doc)

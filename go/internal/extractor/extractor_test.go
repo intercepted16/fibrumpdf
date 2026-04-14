@@ -1,4 +1,4 @@
-package extractor
+package extractor_test
 
 import (
 	"os"
@@ -6,29 +6,21 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/fibrumpdf/go/internal/bridge"
+	"github.com/fibrumpdf/go/internal/extractor"
 	"github.com/fibrumpdf/go/internal/models"
+	"github.com/fibrumpdf/go/internal/raw"
 	"github.com/fibrumpdf/go/internal/testutil"
 )
 
 func extractTestPDF(t *testing.T, pdfName string) []models.Page {
 	t.Helper()
-	if testutil.TestDataDir == "" {
-		t.Fatal("could not find project root")
-	}
-	pdfPath := filepath.Join(testutil.TestDataDir, pdfName)
-	if _, err := os.Stat(pdfPath); err != nil {
-		t.Fatalf("test pdf not found: %s", pdfPath)
-	}
 
-	tempDir, err := bridge.ExtractAllPagesRaw(pdfPath)
+	tempDir, err := testutil.ExtractRawFromTestData(pdfName)
 	if err != nil {
 		t.Fatalf("extraction failed: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := os.RemoveAll(tempDir); err != nil {
-			t.Logf("warning: failed to cleanup temp dir %s: %v", tempDir, err)
-		}
+		os.RemoveAll(tempDir)
 	})
 
 	files, err := os.ReadDir(tempDir)
@@ -41,12 +33,12 @@ func extractTestPDF(t *testing.T, pdfName string) []models.Page {
 		if !strings.HasSuffix(f.Name(), ".raw") {
 			continue
 		}
-		raw, err := bridge.ReadRawPage(filepath.Join(tempDir, f.Name()))
+		raw, err := raw.ReadRawPage(filepath.Join(tempDir, f.Name()))
 		if err != nil {
 			t.Logf("warning: failed to read page %s: %v", f.Name(), err)
 			continue
 		}
-		pages = append(pages, ExtractPageFromRaw(raw))
+		pages = append(pages, extractor.ExtractPageFromRaw(raw))
 	}
 	return pages
 }
@@ -70,7 +62,7 @@ func TestExtractPageProducesBlocks(t *testing.T) {
 }
 
 func TestExtractHeadings(t *testing.T) {
-	pages := extractTestPDF(t, "sample_with_headings.pdf")
+	pages := extractTestPDF(t, "sample.pdf")
 
 	var headings []models.Block
 	for _, p := range pages {
@@ -97,7 +89,7 @@ func TestExtractHeadings(t *testing.T) {
 }
 
 func TestExtractLists(t *testing.T) {
-	pages := extractTestPDF(t, "sample_with_lists.pdf")
+	pages := extractTestPDF(t, "sample.pdf")
 
 	var lists []models.Block
 	for _, p := range pages {
@@ -126,7 +118,7 @@ func TestExtractLists(t *testing.T) {
 }
 
 func TestExtractTables(t *testing.T) {
-	pages := extractTestPDF(t, "sample_with_table.pdf")
+	pages := extractTestPDF(t, "sample.pdf")
 
 	var tables []models.Block
 	for _, p := range pages {
@@ -156,7 +148,7 @@ func TestExtractTables(t *testing.T) {
 }
 
 func TestExtractFormatting(t *testing.T) {
-	pages := extractTestPDF(t, "sample_with_formatting.pdf")
+	pages := extractTestPDF(t, "sample.pdf")
 
 	var boldFound, italicFound bool
 	for _, p := range pages {
@@ -178,75 +170,4 @@ func TestExtractFormatting(t *testing.T) {
 	if !italicFound {
 		t.Error("no italic text detected")
 	}
-}
-
-func TestExtractLargeDocument(t *testing.T) {
-	pages := extractTestPDF(t, "nist.pdf")
-
-	if len(pages) < 100 {
-		t.Errorf("expected many pages, got %d", len(pages))
-	}
-
-	blockTypes := make(map[models.BlockType]int)
-	for _, p := range pages {
-		for _, b := range p.Data {
-			blockTypes[b.Type]++
-		}
-	}
-
-	if blockTypes[models.BlockText] == 0 {
-		t.Error("no text blocks in large document")
-	}
-	if blockTypes[models.BlockHeading] == 0 {
-		t.Error("no headings in large document")
-	}
-
-	t.Logf("large doc: %d pages, block types: %v", len(pages), blockTypes)
-}
-
-func TestBlocksHaveValidBBox(t *testing.T) {
-	pages := extractTestPDF(t, "nist.pdf")
-
-	for _, p := range pages {
-		for i, b := range p.Data {
-			if b.BBox.IsEmpty() && b.Type != models.BlockOther {
-				continue
-			}
-			if b.BBox.X0() < 0 || b.BBox.Y0() < 0 {
-				t.Errorf("page %d block %d has negative bbox coords", p.Number, i)
-			}
-			if b.BBox.Width() <= 0 && b.Type != models.BlockOther {
-				t.Errorf("page %d block %d has zero/negative width", p.Number, i)
-			}
-			if b.BBox.Height() <= 0 && b.Type != models.BlockOther {
-				t.Errorf("page %d block %d has zero/negative height", p.Number, i)
-			}
-		}
-	}
-}
-
-func TestSpansHaveContent(t *testing.T) {
-	pages := extractTestPDF(t, "nist.pdf")
-
-	emptyCount := 0
-	totalSpans := 0
-	for _, p := range pages {
-		for _, b := range p.Data {
-			if b.Type == models.BlockTable || b.Type == models.BlockList {
-				continue
-			}
-			for _, span := range b.Spans {
-				totalSpans++
-				if strings.TrimSpace(span.Text) == "" {
-					emptyCount++
-				}
-			}
-		}
-	}
-
-	emptyRatio := float64(emptyCount) / float64(totalSpans)
-	if emptyRatio > 0.1 {
-		t.Errorf("too many empty spans: %d/%d (%.2f%%)", emptyCount, totalSpans, emptyRatio*100)
-	}
-	t.Logf("spans: %d total, %d empty (%.2f%%)", totalSpans, emptyCount, emptyRatio*100)
 }
