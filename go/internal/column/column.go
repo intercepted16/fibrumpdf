@@ -17,7 +17,9 @@ type BlockWithColumn interface {
 	SetColumnIndex(idx int)
 }
 
-func DetectAndAssignColumns(blocks []BlockWithColumn, bodyFontSize float32) {
+type LineBBox struct{ X0, X1 float32 }
+
+func DetectAndAssignColumns(blocks []BlockWithColumn, bodyFontSize float32, lineBoxes []LineBBox) {
 	if len(blocks) == 0 {
 		return
 	}
@@ -27,7 +29,7 @@ func DetectAndAssignColumns(blocks []BlockWithColumn, bodyFontSize float32) {
 		assignAllToColumn(blocks, 0)
 		return
 	}
-	columns := detectColumns(blocks, minX, maxX, pageWidth, bodyFontSize)
+	columns := detectColumns(blocks, lineBoxes, minX, maxX, pageWidth, bodyFontSize)
 	if len(columns) <= 1 {
 		assignAllToColumn(blocks, 0)
 		return
@@ -35,29 +37,53 @@ func DetectAndAssignColumns(blocks []BlockWithColumn, bodyFontSize float32) {
 	assignBlocksToColumns(blocks, columns)
 }
 
-func detectColumns(blocks []BlockWithColumn, minX, maxX, pageWidth, bodyFontSize float32) []columnRange {
+func detectColumns(blocks []BlockWithColumn, lineBoxes []LineBBox, minX, maxX, pageWidth, bodyFontSize float32) []columnRange {
 	occupancy := make([]bool, pageWidthResolution)
 	threshold := pageWidth * 0.5
-	for _, b := range blocks {
-		bbox := b.GetBBox()
-		if bw := bbox.Width(); bw > threshold || bw < 5 {
-			continue
+	midX := (minX + maxX) * 0.5
+
+	if len(lineBoxes) > 0 {
+		for _, lb := range lineBoxes {
+			bw := lb.X1 - lb.X0
+			if bw > threshold || bw < 5 {
+				continue
+			}
+
+			if lb.X0 < midX && lb.X1 > midX {
+				continue
+			}
+			idx0 := geometry.Clamp(int((lb.X0-minX)/pageWidth*float32(pageWidthResolution-1)), 0, pageWidthResolution-1)
+			idx1 := geometry.Clamp(int((lb.X1-minX)/pageWidth*float32(pageWidthResolution-1)), 0, pageWidthResolution-1)
+			for k := idx0; k <= idx1; k++ {
+				occupancy[k] = true
+			}
 		}
-		idx0 := geometry.Clamp(int((bbox.X0()-minX)/pageWidth*float32(pageWidthResolution-1)), 0, pageWidthResolution-1)
-		idx1 := geometry.Clamp(int((bbox.X1()-minX)/pageWidth*float32(pageWidthResolution-1)), 0, pageWidthResolution-1)
-		for k := idx0; k <= idx1; k++ {
-			occupancy[k] = true
+	} else {
+		for _, b := range blocks {
+			bbox := b.GetBBox()
+			if bw := bbox.Width(); bw > threshold || bw < 5 {
+				continue
+			}
+
+			if bbox.X0() < midX && bbox.X1() > midX {
+				continue
+			}
+			idx0 := geometry.Clamp(int((bbox.X0()-minX)/pageWidth*float32(pageWidthResolution-1)), 0, pageWidthResolution-1)
+			idx1 := geometry.Clamp(int((bbox.X1()-minX)/pageWidth*float32(pageWidthResolution-1)), 0, pageWidthResolution-1)
+			for k := idx0; k <= idx1; k++ {
+				occupancy[k] = true
+			}
 		}
 	}
-	columns := make([]columnRange, 0, maxColumns)
+
 	gapThresholdUnits := bodyFontSize * 1.2
 	if gapThresholdUnits < 10 {
 		gapThresholdUnits = 10
 	}
 	gapBins := int(gapThresholdUnits / pageWidth * float32(pageWidthResolution))
-	if gapBins < 1 {
-		gapBins = 1
-	}
+	gapBins = max(gapBins, 1)
+
+	columns := make([]columnRange, 0, maxColumns)
 	insideContent, contentStart := false, 0
 	for i := 0; i < pageWidthResolution; i++ {
 		if occupancy[i] {

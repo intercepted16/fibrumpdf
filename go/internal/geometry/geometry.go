@@ -37,6 +37,18 @@ func (r Rect) Intersect(other Rect) Rect {
 
 func (r Rect) IntersectArea(other Rect) float32 { return r.Intersect(other).Area() }
 
+func (r Rect) IoU(other Rect) float32 {
+	inter := r.IntersectArea(other)
+	if inter == 0 {
+		return 0
+	}
+	union := r.Area() + other.Area() - inter
+	if union <= 0 {
+		return 0
+	}
+	return inter / union
+}
+
 func Min32(a, b float32) float32 {
 	if a < b {
 		return a
@@ -66,4 +78,18 @@ func Clamp(x, lo, hi int) int {
 		return hi
 	}
 	return x
+}
+
+func MergeNearby(positions []float32, tol float32) []float32 {
+	if len(positions) < 2 {
+		return positions
+	}
+	var result []float32
+	result = append(result, positions[0])
+	for i := 1; i < len(positions); i++ {
+		if positions[i]-result[len(result)-1] > tol {
+			result = append(result, positions[i])
+		}
+	}
+	return result
 }

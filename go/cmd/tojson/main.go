@@ -21,9 +21,9 @@ import (
 	"time"
 	"unsafe"
 
-	rawdata "github.com/fibrumpdf/go/internal/bridge"
 	"github.com/fibrumpdf/go/internal/extractor"
 	"github.com/fibrumpdf/go/internal/logger"
+	rawdata "github.com/fibrumpdf/go/internal/raw"
 )
 
 var Logger = logger.GetLogger("tomd")
@@ -46,11 +46,11 @@ func pdf_to_json(pdf_path *C.char, output_file *C.char) C.int {
 	return -1
 }
 
-func readRawPageData(pageFile string) (*rawdata.RawPageData, error) {
+func readRawPageData(pageFile string) (*rawdata.PageData, error) {
 	return rawdata.ReadRawPage(pageFile)
 }
 
-func processRawPage(rawData *rawdata.RawPageData, buf *bytes.Buffer) error {
+func processRawPage(rawData *rawdata.PageData, buf *bytes.Buffer) error {
 	page := extractor.ExtractPageFromRaw(rawData)
 	buf.Reset()
 	encoder := json.NewEncoder(buf)
@@ -98,7 +98,7 @@ func pdfToJson(pdfPath, outputPath string) error {
 	type rawPageData struct {
 		idx     int
 		pageNum int
-		data    *rawdata.RawPageData
+		data    *rawdata.PageData
 		err     error
 	}
 

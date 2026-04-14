@@ -5,7 +5,7 @@ import (
 	"unicode"
 
 	"github.com/fibrumpdf/go/internal/models"
-	"github.com/fibrumpdf/go/internal/text"
+	"github.com/fibrumpdf/go/internal/textutil"
 )
 
 type CleanupOpts struct {
@@ -67,7 +67,7 @@ func cleanupSpanText(input string, opts CleanupOpts) string {
 
 	if opts.Normalize {
 		input = strings.ReplaceAll(input, "-\n", "")
-		input = text.NormalizeText(input)
+		input = textutil.NormalizeText(input)
 	}
 
 	if opts.CollapseSpaces {
