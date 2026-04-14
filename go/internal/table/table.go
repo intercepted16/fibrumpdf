@@ -2,134 +2,174 @@ package table
 
 import (
 	"math"
+	"slices"
 	"sort"
-	"strings"
 
 	"github.com/fibrumpdf/go/internal/geometry"
 	"github.com/fibrumpdf/go/internal/logger"
-	"github.com/fibrumpdf/go/internal/models"
 	rawdata "github.com/fibrumpdf/go/internal/raw"
-	"github.com/tidwall/rtree"
 )
 
 var Logger = logger.GetLogger("table")
 
-const (
-	snapTolRatio   = 0.005
-	joinTolRatio   = 0.005
-	minCellRatio   = 0.005
-	maxCellWRatio  = 0.95
-	maxCellHRatio  = 0.20
-	splitGapRatio  = 0.10
-	rowYTolRatio   = 0.015
-	colXTolRatio   = 0.003
-	intersectRatio = 0.0015
-	coordScale     = 1000.0
-)
-
-type Edge struct {
-	X0, Y0, X1, Y1 float64
-	Orientation    byte
-}
-
-type Cell struct {
-	BBox geometry.Rect
-	Text string
-}
-
-type Row struct {
-	BBox  geometry.Rect
-	Cells []Cell
-}
-
-type Table struct {
-	BBox geometry.Rect
-	Rows []Row
-}
-
-type TableArray struct{ Tables []Table }
-
-func coordToInt(x float64) int { return int(x*coordScale + 0.5) }
+func cordToInt(x float64) int { return int(x*cordScale + 0.5) }
 
 func hasEdge(edges []Edge, x0, y0, x1, y1, eps float64) bool {
-	for _, e := range edges {
-		if e.Orientation == 'h' {
-			if math.Abs(e.Y0-y0) < eps && math.Abs(e.Y1-y1) < eps &&
-				e.X0-eps <= math.Min(x0, x1) && e.X1+eps >= math.Max(x0, x1) {
-				return true
-			}
-		} else {
-			if math.Abs(e.X0-x0) < eps && math.Abs(e.X1-x1) < eps &&
-				e.Y0-eps <= math.Min(y0, y1) && e.Y1+eps >= math.Max(y0, y1) {
-				return true
+
+	isHorizontal := math.Abs(y0-y1) < eps
+
+	if isHorizontal {
+
+		targetY := (y0 + y1) / 2
+		spanStart, spanEnd := math.Min(x0, x1), math.Max(x0, x1)
+
+		var coveringEdges []struct{ x0, x1 float64 }
+		for _, e := range edges {
+			if e.Orientation == rawdata.EdgeHorizontal && math.Abs(e.Y0-targetY) < eps {
+				coveringEdges = append(coveringEdges, struct{ x0, x1 float64 }{e.X0, e.X1})
 			}
 		}
+
+		return spanIsCovered(coveringEdges, spanStart, spanEnd, eps)
+	} else {
+
+		targetX := (x0 + x1) / 2
+		spanStart, spanEnd := math.Min(y0, y1), math.Max(y0, y1)
+
+		var coveringEdges []struct{ x0, x1 float64 }
+		for _, e := range edges {
+			if e.Orientation == rawdata.EdgeVertical && math.Abs(e.X0-targetX) < eps {
+				coveringEdges = append(coveringEdges, struct{ x0, x1 float64 }{e.Y0, e.Y1})
+			}
+		}
+
+		return spanIsCovered(coveringEdges, spanStart, spanEnd, eps)
 	}
-	return false
 }
 
-func findCells(points []geometry.Point, tr *rtree.RTreeG[geometry.Point], pageRect geometry.Rect, hEdges, vEdges []Edge) []geometry.Rect {
-	if len(points) < 4 {
+func spanIsCovered(segments []struct{ x0, x1 float64 }, spanStart, spanEnd, eps float64) bool {
+	if len(segments) == 0 {
+		return false
+	}
+
+	sort.Slice(segments, func(i, j int) bool { return segments[i].x0 < segments[j].x0 })
+
+	mergedStart := segments[0].x0
+	mergedEnd := segments[0].x1
+	for i := 1; i < len(segments); i++ {
+		if segments[i].x0 <= mergedEnd+eps {
+			if segments[i].x1 > mergedEnd {
+				mergedEnd = segments[i].x1
+			}
+		} else {
+
+			if mergedStart-eps <= spanStart && mergedEnd+eps >= spanEnd {
+				return true
+			}
+			mergedStart = segments[i].x0
+			mergedEnd = segments[i].x1
+		}
+	}
+
+	return mergedStart-eps <= spanStart && mergedEnd+eps >= spanEnd
+}
+
+func findCells(pageRect geometry.Rect, hEdges, vEdges []Edge, avgEdgeSpacing float64) []geometry.Rect {
+	pw, ph := pageRect.Width(), pageRect.Height()
+	minSize, maxW, maxH := geometry.Min32(pw, ph)*minCellRatio, pw*maxCellWRatio, ph*maxCellHRatio
+	eps := avgEdgeSpacing * 0.3
+	if eps < 1.0 {
+		eps = 1.0
+	}
+	gridCols, gridRows := findGridLines(hEdges, vEdges, eps, pageRect)
+	if len(gridCols) < 2 || len(gridRows) < 2 {
 		return nil
 	}
-	pw, ph := pageRect.Width(), pageRect.Height()
-	diag := float32(math.Sqrt(float64(pw*pw + ph*ph)))
-	minSize, maxW, maxH := geometry.Min32(pw, ph)*minCellRatio, pw*maxCellWRatio, ph*maxCellHRatio
-	snapDist, eps := pw*snapTolRatio, float64(diag*intersectRatio)
-	sorted := make([]geometry.Point, len(points))
-	copy(sorted, points)
-	sort.Slice(sorted, func(i, j int) bool {
-		if dy := sorted[i].Y - sorted[j].Y; math.Abs(float64(dy)) > 0.1 {
-			return dy < 0
-		}
-		return sorted[i].X < sorted[j].X
-	})
-	var snapped []geometry.Point
-	for _, p := range sorted {
-		merged := false
-		for i := range snapped {
-			if geometry.Abs32(p.X-snapped[i].X) < snapDist && geometry.Abs32(p.Y-snapped[i].Y) < snapDist {
-				snapped[i].X, snapped[i].Y = (snapped[i].X+p.X)/2, (snapped[i].Y+p.Y)/2
-				merged = true
-				break
-			}
-		}
-		if !merged {
-			snapped = append(snapped, p)
-		}
-	}
+
 	var cells []geometry.Rect
-	for i, p1 := range snapped {
-		for j := i + 1; j < len(snapped); j++ {
-			if float64(snapped[j].Y-p1.Y) > eps {
-				break
-			}
-			p2 := snapped[j]
-			if p2.X <= p1.X+minSize || !hasEdge(hEdges, float64(p1.X), float64(p1.Y), float64(p2.X), float64(p2.Y), eps) {
+	for ri := 0; ri < len(gridRows)-1; ri++ {
+		for ci := 0; ci < len(gridCols)-1; ci++ {
+			cell := geometry.Rect{X0: gridCols[ci], Y0: gridRows[ri], X1: gridCols[ci+1], Y1: gridRows[ri+1]}
+			w, h := cell.Width(), cell.Height()
+			sizeOk := w > minSize && w < maxW && h > minSize && h < maxH
+			if !sizeOk {
 				continue
 			}
-			for _, p3 := range snapped {
-				if p3.Y <= p1.Y+minSize || math.Abs(float64(p3.X-p1.X)) > eps || !hasEdge(vEdges, float64(p1.X), float64(p1.Y), float64(p3.X), float64(p3.Y), eps) {
-					continue
+
+			edges := [4]bool{
+				hasEdge(hEdges, float64(cell.X0), float64(cell.Y0), float64(cell.X1), float64(cell.Y0), eps),
+				hasEdge(hEdges, float64(cell.X0), float64(cell.Y1), float64(cell.X1), float64(cell.Y1), eps),
+				hasEdge(vEdges, float64(cell.X0), float64(cell.Y0), float64(cell.X0), float64(cell.Y1), eps),
+				hasEdge(vEdges, float64(cell.X1), float64(cell.Y0), float64(cell.X1), float64(cell.Y1), eps),
+			}
+			edgeCount := 0
+			for _, ok := range edges {
+				if ok {
+					edgeCount++
 				}
-				found := false
-				tr.Search([2]float64{float64(p2.X) - eps, float64(p3.Y) - eps}, [2]float64{float64(p2.X) + eps, float64(p3.Y) + eps}, func(_, _ [2]float64, _ geometry.Point) bool {
-					if hasEdge(vEdges, float64(p2.X), float64(p2.Y), float64(p2.X), float64(p3.Y), eps) && hasEdge(hEdges, float64(p3.X), float64(p3.Y), float64(p2.X), float64(p3.Y), eps) {
-						found = true
-						return false
-					}
-					return true
-				})
-				if found {
-					cell := geometry.Rect{X0: p1.X, Y0: p1.Y, X1: p2.X, Y1: p3.Y}
-					if w, h := cell.Width(), cell.Height(); w > minSize && w < maxW && h > minSize && h < maxH {
-						cells = append(cells, cell)
-					}
+			}
+
+			minEdges := 2
+			if (len(gridCols) >= 4 && len(gridRows) >= 4) || len(gridCols) >= 6 || len(gridRows) >= 6 {
+				minEdges = 1
+			}
+			if edgeCount >= minEdges {
+				cells = append(cells, cell)
+			}
+		}
+	}
+
+	if len(cells) < 3 && len(gridRows) >= 2 && len(gridCols) >= 2 {
+		cells = cells[:0]
+		for ri := 0; ri < len(gridRows)-1; ri++ {
+			for ci := 0; ci < len(gridCols)-1; ci++ {
+				cell := geometry.Rect{X0: gridCols[ci], Y0: gridRows[ri], X1: gridCols[ci+1], Y1: gridRows[ri+1]}
+				if w, h := cell.Width(), cell.Height(); w > minSize && w < maxW && h > minSize && h < maxH {
+					cells = append(cells, cell)
 				}
 			}
 		}
 	}
+
 	return cells
+}
+
+func findGridLines(hEdges, vEdges []Edge, eps float64, pageRect geometry.Rect) ([]float32, []float32) {
+	xCluster := NewCluster1D(float32(eps))
+	yCluster := NewCluster1D(float32(eps))
+	minVLen := float64(pageRect.Height()) * 0.02
+	minHLen := float64(pageRect.Width()) * 0.02
+	for _, e := range vEdges {
+		edgeLen := math.Abs(e.Y1 - e.Y0)
+		if edgeLen < minVLen {
+			continue
+		}
+		xCluster.Add(float32(e.X0))
+	}
+	for _, e := range hEdges {
+		edgeLen := math.Abs(e.X1 - e.X0)
+		if edgeLen < minHLen {
+			continue
+		}
+		yCluster.Add(float32(e.Y0))
+	}
+	minXCount := 1
+	minYCount := 1
+	var gridCols []float32
+	for i, count := range xCluster.Counts {
+		if count >= minXCount {
+			gridCols = append(gridCols, xCluster.Centers[i])
+		}
+	}
+	var gridRows []float32
+	for i, count := range yCluster.Counts {
+		if count >= minYCount {
+			gridRows = append(gridRows, yCluster.Centers[i])
+		}
+	}
+	slices.Sort(gridCols)
+	slices.Sort(gridRows)
+	return gridCols, gridRows
 }
 
 func deduplicateCells(cells []geometry.Rect) []geometry.Rect {
@@ -182,314 +222,200 @@ func groupCellsIntoTables(cells []geometry.Rect, pageRect geometry.Rect) *TableA
 	if len(cells) == 0 {
 		return nil
 	}
-	splitGap := pageRect.Height() * splitGapRatio
-	var avgH float32
-	for _, c := range cells {
-		avgH += c.Height()
+	assembler := NewDefaultTableAssembler(NewDefaultTableAssemblyConfig())
+	tables := assembler.AssembleFromCells(cells, pageRect)
+	if tables == nil || tables.isEmpty() {
+		return nil
 	}
-	avgH /= float32(len(cells))
-	sortTol := avgH * 0.2
-	sort.Slice(cells, func(i, j int) bool {
-		if dy := cells[i].Y0 - cells[j].Y0; geometry.Abs32(dy) > sortTol {
-			return dy < 0
-		}
-		return cells[i].X0 < cells[j].X0
-	})
-	tables := &TableArray{}
-	var cur *Table
-	prevY1 := float32(-1000)
-	for i := 0; i < len(cells); {
-		rowY0, yTol := cells[i].Y0, pageRect.Height()*rowYTolRatio
-		j := i + 1
-		for j < len(cells) && math.Abs(float64(cells[j].Y0-rowY0)) <= float64(yTol) {
-			j++
-		}
-		gap := rowY0 - prevY1
-		if i > 0 {
-			if g := rowY0 - cells[i-1].Y1; g > gap {
-				gap = g
-			}
-		}
-		if cur == nil || gap > splitGap {
-			tables.Tables = append(tables.Tables, Table{})
-			cur = &tables.Tables[len(tables.Tables)-1]
-			prevY1 = -1000
-		}
-		rowCells := make([]Cell, j-i)
-		for k := 0; k < j-i; k++ {
-			rowCells[k].BBox = cells[i+k]
-		}
-		sort.Slice(rowCells, func(k1, k2 int) bool { return rowCells[k1].BBox.X0 < rowCells[k2].BBox.X0 })
-		row := Row{Cells: rowCells, BBox: rowCells[0].BBox}
-		for k := 1; k < len(rowCells); k++ {
-			row.BBox = row.BBox.Union(rowCells[k].BBox)
-		}
-		cur.BBox = cur.BBox.Union(row.BBox)
-		cur.Rows = append(cur.Rows, row)
-		prevY1 = row.BBox.Y1
-		i = j
-	}
-	normalizeColumns(tables, pageRect)
-	filterValid(tables, pageRect)
-	if len(tables.Tables) == 0 {
+	tables.normalizeColumns(pageRect)
+	if tables.isEmpty() {
 		return nil
 	}
 	return tables
 }
 
-func normalizeColumns(tables *TableArray, pageRect geometry.Rect) {
-	for ti := range tables.Tables {
-		tbl := &tables.Tables[ti]
-		xCoords := make(map[int]bool)
-		for _, row := range tbl.Rows {
-			for _, cell := range row.Cells {
-				if !cell.BBox.IsEmpty() {
-					xCoords[coordToInt(float64(cell.BBox.X0))] = true
-					xCoords[coordToInt(float64(cell.BBox.X1))] = true
-				}
-			}
-		}
-		sortedX := make([]int, 0, len(xCoords))
-		for x := range xCoords {
-			sortedX = append(sortedX, x)
-		}
-		sort.Ints(sortedX)
-		var cols [][2]float32
-		if len(sortedX) > 0 {
-			colTol := int(pageRect.Width() * colXTolRatio * coordScale)
-			if colTol < 2000 {
-				colTol = 2000
-			}
-			for i := 0; i < len(sortedX)-1; {
-				c0 := sortedX[i]
-				j := i + 1
-				for j < len(sortedX) && sortedX[j]-c0 < colTol {
-					j++
-				}
-				if j < len(sortedX) {
-					cols = append(cols, [2]float32{float32(c0) / coordScale, float32(sortedX[j]) / coordScale})
-					i = j
-				} else {
-					break
-				}
-			}
-		}
-		if len(cols) == 0 {
-			continue
-		}
-		for r := range tbl.Rows {
-			row := &tbl.Rows[r]
-			newCells := make([]Cell, len(cols))
-			for _, cell := range row.Cells {
-				if cell.BBox.IsEmpty() {
-					continue
-				}
-				bestCol, maxOvr := -1, float32(0)
-				for ci, col := range cols {
-					ovr := geometry.Min32(cell.BBox.X1, col[1]) - geometry.Max32(cell.BBox.X0, col[0])
-					if ovr > maxOvr {
-						maxOvr, bestCol = ovr, ci
-					}
-				}
-				if bestCol >= 0 && (newCells[bestCol].BBox.IsEmpty() || maxOvr > newCells[bestCol].BBox.Width()*0.5) {
-					newCells[bestCol] = cell
-				}
-			}
-			row.Cells = newCells
-		}
-		pruneEmpty(tbl)
+func adaptiveRowGroupingTolerance(avgH float32, pageRect geometry.Rect) float32 {
+	base := geometry.Max32(avgH*0.35, pageRect.Height()*0.004)
+	minTol := pageRect.Height() * 0.0025
+	maxTol := pageRect.Height() * rowYTolRatio
+	if base < minTol {
+		base = minTol
 	}
+	if base > maxTol {
+		base = maxTol
+	}
+	return base
 }
 
-func pruneEmpty(tbl *Table) {
-	validRows := tbl.Rows[:0]
-	for _, row := range tbl.Rows {
-		for _, c := range row.Cells {
-			if !c.BBox.IsEmpty() {
-				validRows = append(validRows, row)
-				break
-			}
-		}
-	}
-	tbl.Rows = validRows
-	if len(tbl.Rows) == 0 || len(tbl.Rows[0].Cells) == 0 {
-		return
-	}
-	keepCols := make([]bool, len(tbl.Rows[0].Cells))
-	for c := range tbl.Rows[0].Cells {
-		if !tbl.Rows[0].Cells[c].BBox.IsEmpty() {
-			keepCols[c] = true
-		}
-	}
-	newColCount := 0
-	for _, k := range keepCols {
-		if k {
-			newColCount++
-		}
-	}
-	if newColCount > 0 && newColCount < len(tbl.Rows[0].Cells) {
-		for r := range tbl.Rows {
-			oldCells := tbl.Rows[r].Cells
-			newCells := make([]Cell, 0, newColCount)
-			for c, cell := range oldCells {
-				if c < len(keepCols) && keepCols[c] {
-					newCells = append(newCells, cell)
-				}
-			}
-			tbl.Rows[r].Cells = newCells
-		}
-	}
-	if len(tbl.Rows) > 0 {
-		colCount := len(tbl.Rows[0].Cells)
-		for r := 1; r < len(tbl.Rows); r++ {
-			row := &tbl.Rows[r]
-			if len(row.Cells) > colCount {
-				row.Cells = row.Cells[:colCount]
-			} else if len(row.Cells) < colCount {
-				padded := make([]Cell, colCount)
-				copy(padded, row.Cells)
-				row.Cells = padded
-			}
-		}
-	}
-}
-
-func filterValid(tables *TableArray, pageRect geometry.Rect) {
-	valid := tables.Tables[:0]
-	for _, t := range tables.Tables {
-		pruneEmpty(&t)
-		if len(t.Rows) < 2 || len(t.Rows[0].Cells) < 2 {
-			colsDesc := "0"
-			if len(t.Rows) > 0 {
-				colsDesc = string(rune('0' + len(t.Rows[0].Cells)))
-			}
-			Logger.Debug("table rejected: too few rows/cols", "rows", len(t.Rows), "cols", colsDesc)
-			continue
-		}
-		hRatio, wRatio := t.BBox.Height()/pageRect.Height(), t.BBox.Width()/pageRect.Width()
-		if hRatio > 0.95 || wRatio > 0.98 {
-			Logger.Debug("table rejected: too large", "hRatio", hRatio, "wRatio", wRatio)
-			continue
-		}
-		garbage := false
-		for ri, row := range t.Rows {
-			if len(row.Cells) < 2 {
-				continue
-			}
-			var minH, maxH float32 = 1e6, 0
-			cellCount := 0
-			for _, cell := range row.Cells {
-				if !cell.BBox.IsEmpty() {
-					h := cell.BBox.Height()
-					if h < minH {
-						minH = h
-					}
-					if h > maxH {
-						maxH = h
-					}
-					cellCount++
-				}
-			}
-			if cellCount < 2 || minH <= 0 {
-				continue
-			}
-			ratio := maxH / minH
-			// Tables often have cells with multi-line text content
-			// Header rows can have merged cells with varying heights
-			// Allow higher ratio for header (ri==0) and second row which may contain sub-headers
-			threshold := float32(6.0)
-			if ri <= 1 {
-				threshold = 8.0
-			}
-			if ratio > threshold {
-				Logger.Debug("table rejected: garbage row", "rowIndex", ri, "minH", minH, "maxH", maxH)
-				garbage = true
-				break
-			}
-		}
-		if garbage {
-			continue
-		}
-		totalCells := 0
-		for _, row := range t.Rows {
-			for _, cell := range row.Cells {
-				if !cell.BBox.IsEmpty() {
-					totalCells++
-				}
-			}
-		}
-		if len(t.Rows) > 10 && totalCells < len(t.Rows)*2 {
-			Logger.Debug("table rejected: too sparse", "rows", len(t.Rows), "totalCells", totalCells)
-			continue
-		}
-		validRows, expectedCols, missingRows := 0, -1, 0
-		for _, row := range t.Rows {
-			if len(row.Cells) == 0 {
-				continue
-			}
-			validRows++
-			if expectedCols < 0 {
-				expectedCols = len(row.Cells)
-			} else if len(row.Cells) < expectedCols {
-				missingRows++
-			}
-		}
-		if validRows > 0 && float32(missingRows) > float32(validRows)*0.4 {
-			Logger.Debug("table rejected: too many missing rows", "missingRows", missingRows, "validRows", validRows)
-			continue
-		}
-		if validRows >= 2 && expectedCols >= 2 {
-			valid = append(valid, t)
+func tableBBoxFromRowsForTrim(rows []Row) geometry.Rect {
+	var bbox geometry.Rect
+	for _, row := range rows {
+		if bbox.IsEmpty() {
+			bbox = row.BBox
 		} else {
-			Logger.Debug("table rejected: final check failed", "validRows", validRows, "expectedCols", expectedCols)
+			bbox = bbox.Union(row.BBox)
 		}
 	}
-	tables.Tables = valid
+	return bbox
 }
 
-func ShrinkCellsToContent(tables *TableArray, chars []rawdata.Char) {
-	if tables == nil || len(chars) == 0 {
+func shouldPreserveEmptyColumns(tbl Table) bool {
+	if len(tbl.Rows) < 2 {
+		return false
+	}
+	lastCol := len(tbl.Rows[0].Cells) - 1
+	if lastCol <= 0 {
+		return false
+	}
+	for _, row := range tbl.Rows {
+		if len(row.Cells) <= lastCol {
+			return false
+		}
+		if row.Cells[lastCol].BBox.IsEmpty() {
+			return false
+		}
+	}
+	return true
+}
+
+func splitTableOnSparseRowRuns(tbl Table, pageRect geometry.Rect) []Table {
+	if len(tbl.Rows) < 10 {
+		return []Table{tbl}
+	}
+	dominantCols := dominantRowCellCount(tbl.Rows)
+	if dominantCols < 4 {
+		return []Table{tbl}
+	}
+	tableWidth := tbl.BBox.Width()
+	if tableWidth <= 0 {
+		return []Table{tbl}
+	}
+	gapThreshold := adaptiveIntraTableGapThreshold(tbl.Rows, pageRect)
+	start := 0
+	var segments []Table
+	for i := 2; i < len(tbl.Rows)-2; {
+		if !isSparseSeparatorRow(tbl.Rows[i], dominantCols, tableWidth) {
+			i++
+			continue
+		}
+		j := i
+		for j < len(tbl.Rows)-1 && isSparseSeparatorRow(tbl.Rows[j], dominantCols, tableWidth) {
+			j++
+		}
+		leftStart := i - 4
+		leftStart = max(leftStart, start)
+		rightEnd := j + 4
+		rightEnd = min(rightEnd, len(tbl.Rows))
+		leftDense := denseRowRatio(tbl.Rows[leftStart:i], dominantCols) >= 0.55
+		rightDense := denseRowRatio(tbl.Rows[j:rightEnd], dominantCols) >= 0.55
+		gapBefore := float32(0)
+		if i > 0 {
+			gapBefore = tbl.Rows[i].BBox.Y0 - tbl.Rows[i-1].BBox.Y1
+		}
+		gapAfter := float32(0)
+		if j < len(tbl.Rows) {
+			gapAfter = tbl.Rows[j].BBox.Y0 - tbl.Rows[j-1].BBox.Y1
+		}
+		gapAround := geometry.Max32(gapBefore, gapAfter)
+		separatorRun := j - i
+		if leftDense && rightDense && (separatorRun >= 2 || gapAround >= gapThreshold) {
+			if i-start >= 2 {
+				rows := append([]Row(nil), tbl.Rows[start:i]...)
+				segments = append(segments, Table{Rows: rows, BBox: tableBBoxFromRowsForTrim(rows)})
+			}
+			start = j
+			i = j + 1
+			continue
+		}
+		i = j + 1
+	}
+	if len(tbl.Rows)-start >= 2 {
+		rows := append([]Row(nil), tbl.Rows[start:]...)
+		segments = append(segments, Table{Rows: rows, BBox: tableBBoxFromRowsForTrim(rows)})
+	}
+	if len(segments) <= 1 {
+		return []Table{tbl}
+	}
+	Logger.Debug("split table on sparse separator rows", "parts", len(segments), "rows", len(tbl.Rows), "dominantCols", dominantCols)
+	return segments
+}
+
+func dominantRowCellCount(rows []Row) int {
+	counts := make(map[int]int)
+	bestCols := 0
+	bestCount := 0
+	for _, row := range rows {
+		cols := len(row.Cells)
+		if cols <= 0 {
+			continue
+		}
+		counts[cols]++
+		if counts[cols] > bestCount {
+			bestCount = counts[cols]
+			bestCols = cols
+		}
+	}
+	return bestCols
+}
+
+func adaptiveIntraTableGapThreshold(rows []Row, pageRect geometry.Rect) float32 {
+	gaps := make([]float32, 0, len(rows)-1)
+	for i := 1; i < len(rows); i++ {
+		gap := rows[i].BBox.Y0 - rows[i-1].BBox.Y1
+		if gap > 0 {
+			gaps = append(gaps, gap)
+		}
+	}
+	base := pageRect.Height() * 0.009
+	if len(gaps) == 0 {
+		return base
+	}
+	slices.Sort(gaps)
+	medianGap := gaps[len(gaps)/2]
+	threshold := geometry.Max32(base, medianGap*2.2)
+	maxThreshold := pageRect.Height() * 0.055
+	if threshold > maxThreshold {
+		threshold = maxThreshold
+	}
+	return threshold
+}
+
+func isSparseSeparatorRow(row Row, dominantCols int, tableWidth float32) bool {
+	rowCols := len(row.Cells)
+	if rowCols <= 0 {
+		return true
+	}
+	maxCols := dominantCols / 3
+	maxCols = max(maxCols, 1)
+	if rowCols > maxCols {
+		return false
+	}
+	return row.BBox.Width()/tableWidth >= 0.35
+}
+
+func denseRowRatio(rows []Row, dominantCols int) float32 {
+	if len(rows) == 0 {
+		return 0
+	}
+	minDense := dominantCols - 1
+	minDense = max(minDense, 2)
+	dense := 0
+	for _, row := range rows {
+		if len(row.Cells) >= minDense {
+			dense++
+		}
+	}
+	return float32(dense) / float32(len(rows))
+}
+
+func (tables *TableArray) normalizeColumns(pageRect geometry.Rect) {
+	if tables.isEmpty() {
 		return
 	}
 	for ti := range tables.Tables {
 		tbl := &tables.Tables[ti]
-		rect := tbl.BBox
-		var tblChars []rawdata.Char
-		for _, ch := range chars {
-			if ch.BBox.X0 < rect.X1+2 && ch.BBox.X1 > rect.X0-2 && ch.BBox.Y0 < rect.Y1+2 && ch.BBox.Y1 > rect.Y0-2 {
-				tblChars = append(tblChars, ch)
-			}
-		}
-		if len(tblChars) == 0 {
-			continue
-		}
-		for ri := range tbl.Rows {
-			for ci := range tbl.Rows[ri].Cells {
-				cell := &tbl.Rows[ri].Cells[ci]
-				if cell.BBox.IsEmpty() {
-					continue
-				}
-				search := geometry.Rect{X0: cell.BBox.X0 - 2, Y0: cell.BBox.Y0 - 2, X1: cell.BBox.X1 + 2, Y1: cell.BBox.Y1 + 2}
-				var content geometry.Rect
-				first := true
-				for _, ch := range tblChars {
-					if ch.BBox.X0 < search.X1 && ch.BBox.X1 > search.X0 && ch.BBox.Y0 < search.Y1 && ch.BBox.Y1 > search.Y0 {
-						cr := geometry.Rect{X0: ch.BBox.X0, Y0: ch.BBox.Y0, X1: ch.BBox.X1, Y1: ch.BBox.Y1}
-						if first {
-							content, first = cr, false
-						} else {
-							content = content.Union(cr)
-						}
-					}
-				}
-				if !first {
-					cell.BBox.X0 = geometry.Max32(cell.BBox.X0, content.X0)
-					cell.BBox.Y0 = geometry.Max32(cell.BBox.Y0, content.Y0)
-					cell.BBox.X1 = geometry.Min32(cell.BBox.X1, content.X1)
-					cell.BBox.Y1 = geometry.Min32(cell.BBox.Y1, content.Y1)
-				}
-			}
-		}
+		grid := NewTableGrid(tbl)
+		grid.Normalize(GridNormalizeOptions{NormalizeColumns: true, PreserveEmptyColumns: shouldPreserveEmptyColumns(*tbl), PageRect: pageRect})
 	}
 }
 
@@ -498,7 +424,7 @@ func mergeEdges(edges []Edge, snapTol, joinTol float64) []Edge {
 		return nil
 	}
 	orientation := edges[0].Orientation
-	if orientation == 'h' {
+	if orientation == rawdata.EdgeHorizontal {
 		sort.Slice(edges, func(i, j int) bool {
 			if edges[i].Y0 != edges[j].Y0 {
 				return edges[i].Y0 < edges[j].Y0
@@ -514,20 +440,20 @@ func mergeEdges(edges []Edge, snapTol, joinTol float64) []Edge {
 		})
 	}
 	var result []Edge
-	snapInt, joinInt := coordToInt(snapTol), coordToInt(joinTol)
+	snapInt, joinInt := cordToInt(snapTol), cordToInt(joinTol)
 	for i := 0; i < len(edges); {
 		cur := edges[i]
-		posSum := coordToInt(cur.Y0)
-		if orientation == 'v' {
-			posSum = coordToInt(cur.X0)
+		posSum := cordToInt(cur.Y0)
+		if orientation == rawdata.EdgeVertical {
+			posSum = cordToInt(cur.X0)
 		}
 		count := 1
 		i++
 		for i < len(edges) {
 			next := edges[i]
-			nextPos := coordToInt(next.Y0)
-			if orientation == 'v' {
-				nextPos = coordToInt(next.X0)
+			nextPos := cordToInt(next.Y0)
+			if orientation == rawdata.EdgeVertical {
+				nextPos = cordToInt(next.X0)
 			}
 			if int(math.Abs(float64(nextPos-posSum/count))) <= snapInt {
 				posSum += nextPos
@@ -537,9 +463,9 @@ func mergeEdges(edges []Edge, snapTol, joinTol float64) []Edge {
 				break
 			}
 		}
-		snapped := float64(posSum/count) / coordScale
+		snapped := float64(posSum/count) / cordScale
 		joined := cur
-		if orientation == 'h' {
+		if orientation == rawdata.EdgeHorizontal {
 			joined.Y0, joined.Y1 = snapped, snapped
 		} else {
 			joined.X0, joined.X1 = snapped, snapped
@@ -547,9 +473,9 @@ func mergeEdges(edges []Edge, snapTol, joinTol float64) []Edge {
 		start := i - count
 		for j := start + 1; j < i; j++ {
 			next := edges[j]
-			if orientation == 'h' {
+			if orientation == rawdata.EdgeHorizontal {
 				next.Y0, next.Y1 = snapped, snapped
-				if coordToInt(next.X0)-coordToInt(joined.X1) <= joinInt {
+				if cordToInt(next.X0)-cordToInt(joined.X1) <= joinInt {
 					joined.X1 = math.Max(joined.X1, next.X1)
 				} else {
 					result = append(result, joined)
@@ -557,7 +483,7 @@ func mergeEdges(edges []Edge, snapTol, joinTol float64) []Edge {
 				}
 			} else {
 				next.X0, next.X1 = snapped, snapped
-				if coordToInt(next.Y0)-coordToInt(joined.Y1) <= joinInt {
+				if cordToInt(next.Y0)-cordToInt(joined.Y1) <= joinInt {
 					joined.Y1 = math.Max(joined.Y1, next.Y1)
 				} else {
 					result = append(result, joined)
@@ -570,173 +496,45 @@ func mergeEdges(edges []Edge, snapTol, joinTol float64) []Edge {
 	return result
 }
 
-func findIntersections(vEdges, hEdges []Edge, tr *rtree.RTreeG[geometry.Point], eps float64) {
-	tolInt := coordToInt(eps)
-	for _, v := range vEdges {
-		vXInt, vY0Int, vY1Int := coordToInt(v.X0), coordToInt(v.Y0), coordToInt(v.Y1)
-		for _, h := range hEdges {
-			hYInt := coordToInt(h.Y0)
-			if hYInt < vY0Int-tolInt || hYInt > vY1Int+tolInt {
-				continue
-			}
-			hX0Int, hX1Int := coordToInt(h.X0), coordToInt(h.X1)
-			if hX0Int-tolInt <= vXInt && hX1Int+tolInt >= vXInt {
-				p := geometry.Point{X: float32(v.X0), Y: float32(h.Y0)}
-				exists := false
-				tr.Search([2]float64{float64(p.X - 0.1), float64(p.Y - 0.1)}, [2]float64{float64(p.X + 0.1), float64(p.Y + 0.1)}, func(_, _ [2]float64, _ geometry.Point) bool {
-					exists = true
-					return false
-				})
-				if !exists {
-					tr.Insert([2]float64{float64(p.X), float64(p.Y)}, [2]float64{float64(p.X), float64(p.Y)}, p)
-				}
-			}
+func computeAvgCharWidth(chars []rawdata.Char) float32 {
+	var total float32
+	var count int
+	for _, ch := range chars {
+		w := ch.BBox.X1 - ch.BBox.X0
+		if w > 1 && w < 100 {
+			total += w
+			count++
 		}
 	}
+	if count == 0 {
+		return 5.0
+	}
+	return total / float32(count)
 }
 
-func isPunctOrDigit(r rune) bool {
-	return r == '.' || r == ',' || r == '$' || r == '%' || r == ':' || r == ';' || r == '\'' || r == '"' || r == '-' || r == '(' || r == ')' || (r >= '0' && r <= '9')
-}
-
-func extractTextInRect(raw *rawdata.PageData, rect geometry.Rect) string {
-	var buf strings.Builder
-	var prevX1, prevY0 float32 = -1000, -1000
-	var prevR rune
-	for i := range raw.Chars {
-		ch := &raw.Chars[i]
-		cx, cy := (ch.BBox.X0+ch.BBox.X1)/2, (ch.BBox.Y0+ch.BBox.Y1)/2
-		if cx < rect.X0-2 || cx > rect.X1+2 || cy < rect.Y0-2 || cy > rect.Y1+2 || ch.Codepoint == 0 || ch.Codepoint == 0xFEFF {
-			continue
-		}
-		if buf.Len() > 0 {
-			yDiff, xGap := math.Abs(float64(ch.BBox.Y0-prevY0)), float64(ch.BBox.X0-prevX1)
-			xTol, yTol := math.Max(float64(ch.Size*0.5), 3.0), math.Max(float64(ch.Size*0.3), 2.0)
-			if isPunctOrDigit(ch.Codepoint) || isPunctOrDigit(prevR) {
-				xTol, yTol = math.Max(xTol, 8.0), math.Max(yTol, 10.0)
-			}
-			if yDiff > yTol || xGap > xTol {
-				buf.WriteByte(' ')
-			}
-		}
-		buf.WriteRune(ch.Codepoint)
-		prevX1, prevY0, prevR = ch.BBox.X1, ch.BBox.Y0, ch.Codepoint
-	}
-	res := buf.String()
-	res = strings.TrimSpace(res)
-	res = strings.ReplaceAll(res, "\u00A0", " ")
-	var prev rune
-	var cleaned strings.Builder
-	for _, r := range res {
-		if r == ' ' && prev == ' ' {
-			continue
-		}
-		cleaned.WriteRune(r)
-		prev = r
-	}
-	return cleaned.String()
-}
-
-func extractTextIntoCells(raw *rawdata.PageData, tables *TableArray) {
-	if tables == nil {
-		return
-	}
-	for ti := range tables.Tables {
-		for ri := range tables.Tables[ti].Rows {
-			for ci := range tables.Tables[ti].Rows[ri].Cells {
-				tables.Tables[ti].Rows[ri].Cells[ci].Text = extractTextInRect(raw, tables.Tables[ti].Rows[ri].Cells[ci].BBox)
-			}
+func computeAvgEdgeSpacing(hEdges, vEdges []Edge) float64 {
+	var totalDist float64
+	var count int
+	sort.Slice(hEdges, func(i, j int) bool { return hEdges[i].Y0 < hEdges[j].Y0 })
+	for i := 1; i < len(hEdges); i++ {
+		dist := math.Abs(hEdges[i].Y0 - hEdges[i-1].Y0)
+		if dist > 1.0 {
+			totalDist += dist
+			count++
 		}
 	}
-}
-
-func convertTableRows(tbl Table) ([]models.TableRow, int) {
-	var rows []models.TableRow
-	visibleRows := 0
-	for _, r := range tbl.Rows {
-		var cells []models.TableCell
-		hasVisible := false
-		for _, c := range r.Cells {
-			if c.BBox.IsEmpty() {
-				continue
-			}
-			var spans []models.Span
-			if trimmed := strings.TrimSpace(c.Text); trimmed != "" {
-				spans, hasVisible = append(spans, models.Span{Text: trimmed}), true
-			}
-			cells = append(cells, models.TableCell{BBox: models.BBox{c.BBox.X0, c.BBox.Y0, c.BBox.X1, c.BBox.Y1}, Spans: spans})
-		}
-		if len(cells) > 0 {
-			rows = append(rows, models.TableRow{BBox: models.BBox{r.BBox.X0, r.BBox.Y0, r.BBox.X1, r.BBox.Y1}, Cells: cells})
-			if hasVisible {
-				visibleRows++
-			}
+	sort.Slice(vEdges, func(i, j int) bool { return vEdges[i].X0 < vEdges[j].X0 })
+	for i := 1; i < len(vEdges); i++ {
+		dist := math.Abs(vEdges[i].X0 - vEdges[i-1].X0)
+		if dist > 1.0 {
+			totalDist += dist
+			count++
 		}
 	}
-	if len(rows) > 0 {
-		normalizeHeaderRow(&rows)
+	if count == 0 {
+		return 10.0
 	}
-	return rows, visibleRows
-}
-
-func normalizeHeaderRow(rows *[]models.TableRow) {
-	if len(*rows) == 0 {
-		return
-	}
-	header := &(*rows)[0]
-	nonEmpty := make([]models.TableCell, 0, len(header.Cells))
-	for _, cell := range header.Cells {
-		for _, span := range cell.Spans {
-			if strings.TrimSpace(span.Text) != "" {
-				nonEmpty = append(nonEmpty, cell)
-				break
-			}
-		}
-	}
-	header.Cells = nonEmpty
-	colCount := len(nonEmpty)
-	for i := 1; i < len(*rows); i++ {
-		row := &(*rows)[i]
-		if len(row.Cells) > colCount {
-			row.Cells = row.Cells[:colCount]
-		} else if len(row.Cells) < colCount {
-			padded := make([]models.TableCell, colCount)
-			copy(padded, row.Cells)
-			row.Cells = padded
-		}
-	}
-}
-
-func ExtractAndConvertTables(raw *rawdata.PageData) []models.Block {
-	if len(raw.Edges) == 0 {
-		return nil
-	}
-	Logger.Debug("extracting tables", "page", raw.PageNumber, "edges", len(raw.Edges))
-	pageRect := geometry.Rect{X0: raw.PageBounds.X0, Y0: raw.PageBounds.Y0, X1: raw.PageBounds.X1, Y1: raw.PageBounds.Y1}
-	tables := detectTables(raw.Edges, pageRect, raw.PageNumber)
-	if tables == nil || len(tables.Tables) == 0 {
-		Logger.Debug("no tables detected")
-		return nil
-	}
-	Logger.Debug("detected tables", "count", len(tables.Tables))
-	ShrinkCellsToContent(tables, raw.Chars)
-	extractTextIntoCells(raw, tables)
-	var blocks []models.Block
-	for _, tbl := range tables.Tables {
-		rows, visibleRows := convertTableRows(tbl)
-		if visibleRows > 0 && len(rows) > 0 && len(rows[0].Cells) > 0 {
-			blocks = append(blocks, models.Block{
-				Type:      models.BlockTable,
-				BBox:      models.BBox{tbl.BBox.X0, tbl.BBox.Y0, tbl.BBox.X1, tbl.BBox.Y1},
-				RowCount:  visibleRows,
-				ColCount:  len(rows[0].Cells),
-				CellCount: visibleRows * len(rows[0].Cells),
-				Rows:      rows,
-			})
-		}
-	}
-	Logger.Debug("table extraction complete", "blocks", len(blocks))
-	return blocks
+	return totalDist / float64(count)
 }
 
 func detectTables(bridgeEdges []rawdata.Edge, pageRect geometry.Rect, pageNum int) *TableArray {
@@ -745,11 +543,11 @@ func detectTables(bridgeEdges []rawdata.Edge, pageRect geometry.Rect, pageNum in
 	}
 	var hEdges, vEdges []Edge
 	for _, e := range bridgeEdges {
-		edge := Edge{X0: e.X0, Y0: e.Y0, X1: e.X1, Y1: e.Y1, Orientation: byte(e.Orientation)}
-		if e.Orientation == rawdata.EdgeHorizontal {
-			hEdges = append(hEdges, edge)
-		} else {
-			vEdges = append(vEdges, edge)
+		switch e.Orientation {
+		case rawdata.EdgeHorizontal:
+			hEdges = append(hEdges, e)
+		case rawdata.EdgeVertical:
+			vEdges = append(vEdges, e)
 		}
 	}
 	pw := float64(pageRect.Width())
@@ -757,23 +555,12 @@ func detectTables(bridgeEdges []rawdata.Edge, pageRect geometry.Rect, pageNum in
 	hEdges = mergeEdges(hEdges, snapTol, joinTol)
 	vEdges = mergeEdges(vEdges, snapTol, joinTol)
 	Logger.Debug("merged edges", "page", pageNum, "hEdges", len(hEdges), "vEdges", len(vEdges))
-	if len(hEdges) < 3 || len(vEdges) < 3 {
+	if len(hEdges) < minHEdges || len(vEdges) < minVEdges {
 		return nil
 	}
-	ph := float64(pageRect.Height())
-	eps := math.Sqrt(pw*pw+ph*ph) * intersectRatio
-	var tr rtree.RTreeG[geometry.Point]
-	findIntersections(vEdges, hEdges, &tr, eps)
-	var points []geometry.Point
-	tr.Scan(func(_, _ [2]float64, value geometry.Point) bool {
-		points = append(points, value)
-		return true
-	})
-	Logger.Debug("found intersection points", "page", pageNum, "count", len(points))
-	if len(points) < 4 {
-		return nil
-	}
-	cells := findCells(points, &tr, pageRect, hEdges, vEdges)
+	avgEdgeSpacing := computeAvgEdgeSpacing(hEdges, vEdges)
+	Logger.Debug("avg edge spacing", "page", pageNum, "spacing", avgEdgeSpacing)
+	cells := findCells(pageRect, hEdges, vEdges, avgEdgeSpacing)
 	Logger.Debug("found cells", "page", pageNum, "count", len(cells))
 	if len(cells) == 0 {
 		return nil
@@ -798,5 +585,12 @@ func detectTables(bridgeEdges []rawdata.Edge, pageRect geometry.Rect, pageNum in
 	}
 	valid = deduplicateCells(valid)
 	Logger.Debug("deduplicated cells", "page", pageNum, "validCells", len(valid))
-	return groupCellsIntoTables(valid, pageRect)
+	tables := groupCellsIntoTables(valid, pageRect)
+	if tables == nil {
+		return nil
+	}
+	for i := range tables.Tables {
+		tables.Tables[i].RuledTable = true
+	}
+	return tables
 }
