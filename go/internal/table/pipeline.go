@@ -41,6 +41,23 @@ func (p tableExtractionPipeline) run(raw *rawdata.PageData) []models.Block {
 	if len(detected.tables) > 0 {
 		materialized := p.materializer.run(raw, detected)
 		selected = p.selector.run(raw.PageRect(), raw, materialized)
+		if len(selected.tables) > 0 && shouldTryBorderlessFallback(selected.tables) {
+			borderlessDetected := p.detector.runBorderless(raw)
+			if len(borderlessDetected.tables) > 0 {
+				borderlessMaterialized := p.materializer.run(raw, borderlessDetected)
+				borderlessSelected := p.selector.run(raw.PageRect(), raw, borderlessMaterialized)
+				if chooseBetterTables(borderlessSelected.tables, selected.tables) {
+					selected = borderlessSelected
+				}
+			}
+		}
+	}
+	if len(selected.tables) == 0 {
+		borderlessDetected := p.detector.runBorderless(raw)
+		if len(borderlessDetected.tables) > 0 {
+			borderlessMaterialized := p.materializer.run(raw, borderlessDetected)
+			selected = p.selector.run(raw.PageRect(), raw, borderlessMaterialized)
+		}
 	}
 	if len(selected.tables) == 0 {
 		return nil
@@ -61,6 +78,92 @@ func (s tableDetector) run(raw *rawdata.PageData) detectedTables {
 	}
 	// No grid tables found
 	return detectedTables{}
+}
+
+func (s tableDetector) runBorderless(raw *rawdata.PageData) detectedTables {
+	pageRect := raw.PageRect()
+	tables := detectBorderlessTables(raw, pageRect)
+	if tables == nil || tables.isEmpty() {
+		return detectedTables{}
+	}
+	return detectedTables{tables: tables.Tables}
+}
+
+func shouldTryBorderlessFallback(tables []Table) bool {
+	for _, tbl := range tables {
+		if !tbl.RuledTable {
+			continue
+		}
+		if ruledTableLooksOversegmented(tbl) {
+			return true
+		}
+	}
+	return false
+}
+
+func ruledTableLooksOversegmented(tbl Table) bool {
+	if len(tbl.Rows) < 2 {
+		return false
+	}
+	fragmentCells := 0
+	nonEmpty := 0
+	for _, row := range tbl.Rows {
+		for _, cell := range row.Cells {
+			text := strings.TrimSpace(cell.Text)
+			if text == "" {
+				continue
+			}
+			nonEmpty++
+			runes := []rune(strings.ReplaceAll(text, "<br>", " "))
+			if len(runes) > 0 && len(runes) <= 3 {
+				letters := 0
+				for _, r := range runes {
+					if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= 0xC0 && r <= 0x02AF) {
+						letters++
+					}
+				}
+				if letters >= 2 {
+					fragmentCells++
+				}
+			}
+		}
+	}
+	if nonEmpty == 0 {
+		return false
+	}
+	return float32(fragmentCells)/float32(nonEmpty) >= 0.22
+}
+
+func chooseBetterTables(candidate, current []Table) bool {
+	if len(candidate) == 0 {
+		return false
+	}
+	if len(current) == 0 {
+		return true
+	}
+	return tableSetQualityScore(candidate) > tableSetQualityScore(current)
+}
+
+func tableSetQualityScore(tables []Table) float32 {
+	score := float32(0)
+	for _, tbl := range tables {
+		populated := 0
+		total := 0
+		for _, row := range tbl.Rows {
+			for _, cell := range row.Cells {
+				total++
+				if strings.TrimSpace(cell.Text) != "" {
+					populated++
+				}
+			}
+		}
+		if total == 0 {
+			continue
+		}
+		fill := float32(populated) / float32(total)
+		score += fill * float32(len(tbl.Rows)+1)
+	}
+	return score
 }
 
 type tableMaterializer struct{}
