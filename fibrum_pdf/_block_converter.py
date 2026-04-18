@@ -36,17 +36,13 @@ def _join_spans(spans: list[dict[str, Any]]) -> str:
     for i, span in enumerate(spans):
         if not (styled := _style_span(span)):
             continue
-        if (
-            parts
-            and any(styled.startswith(m) for m in FMT_MARKERS)
-            and parts[-1][-1:] not in " \n\t([/"
-        ):
+        if parts and styled.startswith(FMT_MARKERS) and parts[-1][-1:] not in " \n\t([/":
             parts.append(" ")
         parts.append(styled)
+        nxt = spans[i + 1].get("text", "") if i + 1 < len(spans) else ""
         if (
-            i + 1 < len(spans)
-            and (nxt := spans[i + 1].get("text", ""))
-            and any(styled.endswith(m) for m in FMT_MARKERS)
+            nxt
+            and styled.endswith(FMT_MARKERS)
             and nxt[0] not in PUNCT
         ):
             parts.append(" ")
@@ -97,29 +93,54 @@ def _list(block: dict[str, Any], text: str) -> str:
     )
 
 
+def _heading(block: dict[str, Any], text: str) -> str:
+    level = max(1, min(int(block.get("level") or 1), 6))
+    if level >= 4:
+        plain = (block.get("text") or "").strip() or "".join(
+            str(span.get("text", "")) for span in block.get("spans", [])
+        ).strip()
+        return f"**{plain or text}**\n"
+    return f"{'#' * level} **{text}**\n"
+
+
+def _paragraph(_: dict[str, Any], text: str) -> str:
+    return f"{text}\n"
+
+
+def _code(_: dict[str, Any], text: str) -> str:
+    return f"{text}\n"
+
+
+def _table_block(block: dict[str, Any], _: str) -> str:
+    return _table(block.get("rows", []))
+
+
+def _list_block(block: dict[str, Any], text: str) -> str:
+    return _list(block, text)
+
+
+def _figure(block: dict[str, Any], _: str) -> str:
+    return f"![Figure]({block.get('text', 'figure')})\n"
+
+
+_BLOCK_RENDERERS = {
+    "heading": _heading,
+    "paragraph": _paragraph,
+    "text": _paragraph,
+    "code": _code,
+    "table": _table_block,
+    "list": _list_block,
+    "figure": _figure,
+}
+
+
 def block_to_markdown(block: dict[str, Any]) -> str:
     typ = block.get("type", "")
     text = block.get("text", "").strip() or _join_spans(block.get("spans", []))
     if not text and typ not in ("table", "list"):
         return ""
 
-    if typ == "heading":
-        level = max(1, min(int(block.get("level") or 1), 6))
-        if level >= 4:
-            plain = (block.get("text") or "").strip() or "".join(
-                str(span.get("text", "")) for span in block.get("spans", [])
-            ).strip()
-            return f"**{plain or text}**\n"
-        return f"{'#' * level} **{text}**\n"
-    elif typ in ("paragraph", "text"):
-        return f"{text}\n"
-    elif typ == "code":
-        return f"{text}\n"
-    elif typ == "table":
-        return _table(block.get("rows", []))
-    elif typ == "list":
-        return _list(block, text)
-    elif typ == "figure":
-        return f"![Figure]({block.get('text', 'figure')})\n"
+    if render := _BLOCK_RENDERERS.get(typ):
+        return render(block, text)
     log.debug("skipping block type=%s", typ)
     return ""

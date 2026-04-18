@@ -14,8 +14,54 @@ from setuptools.command.bdist_wheel import bdist_wheel as bdist_wheel_base
 
 ROOT = Path(__file__).parent.resolve()
 PACKAGENAME = "fibrum_pdf"
-TARGET_NAME = "tomd"
 LIB_BASENAME = "tomd"
+GO_DIR = ROOT / "go"
+BUILD_DIR = ROOT / "build"
+LIB_EXT_BY_PLATFORM = {"linux": ".so", "darwin": ".dylib", "win32": ".dll"}
+
+
+def _download_go_deps() -> None:
+    print("Downloading Go dependencies...")
+    try:
+        subprocess.check_call(["go", "mod", "download"], cwd=GO_DIR)
+    except subprocess.CalledProcessError as e:
+        print(f"Warning: Failed to download Go dependencies: {e}")
+
+
+def _lib_name() -> str:
+    lib_ext = LIB_EXT_BY_PLATFORM.get(sys.platform, ".so")
+    return f"lib{LIB_BASENAME}{lib_ext}"
+
+
+def _build_shared_library() -> Path:
+    BUILD_DIR.mkdir(parents=True, exist_ok=True)
+    _download_go_deps()
+    output_path = BUILD_DIR / _lib_name()
+    print(f"Building Go shared library: {output_path.name}")
+    subprocess.check_call(
+        [
+            "go",
+            "build",
+            "-buildmode=c-shared",
+            "-o",
+            str(output_path),
+            "./cmd/tojson",
+        ],
+        cwd=GO_DIR,
+        env=os.environ.copy(),
+    )
+    if not output_path.exists():
+        raise FileNotFoundError(
+            f"Go build succeeded but library not found at {output_path}"
+        )
+    return output_path
+
+
+def _copy_library(output_path: Path, target_dir: Path, *, suffix: str = "") -> None:
+    target_dir.mkdir(parents=True, exist_ok=True)
+    message_suffix = f" {suffix}" if suffix else ""
+    print(f"Copying {output_path} to {target_dir / output_path.name}{message_suffix}")
+    shutil.copy2(output_path, target_dir / output_path.name)
 
 
 class build_py(build_py_base):
@@ -26,57 +72,9 @@ class build_py(build_py_base):
         super().run()
 
     def _build_libtomd(self) -> None:
-        go_dir = ROOT / "go"
-        build_dir = ROOT / "build"
-
-        build_dir.mkdir(parents=True, exist_ok=True)
-
-        print("Downloading Go dependencies...")
-        try:
-            subprocess.check_call(["go", "mod", "download"], cwd=go_dir)
-        except subprocess.CalledProcessError as e:
-            print(f"Warning: Failed to download Go dependencies: {e}")
-
-        if sys.platform == "linux":
-            lib_ext = ".so"
-        elif sys.platform == "darwin":
-            lib_ext = ".dylib"
-        elif sys.platform == "win32":
-            lib_ext = ".dll"
-        else:
-            lib_ext = ".so"
-
-        lib_name = f"lib{LIB_BASENAME}{lib_ext}"
-        output_path = build_dir / lib_name
-
-        print(f"Building Go shared library: {lib_name}")
-        build_cmd = [
-            "go",
-            "build",
-            "-buildmode=c-shared",
-            "-o",
-            str(output_path),
-            "./cmd/tojson",
-        ]
-
-        env = os.environ.copy()
-
-        try:
-            subprocess.check_call(build_cmd, cwd=go_dir, env=env)
-        except subprocess.CalledProcessError as e:
-            print(f"Error building Go library: {e}")
-            raise
-
-        if not output_path.exists():
-            raise FileNotFoundError(
-                f"Go build succeeded but library not found at {output_path}"
-            )
-
+        output_path = _build_shared_library()
         target_dir = Path(self.build_lib) / PACKAGENAME / "lib"
-        target_dir.mkdir(parents=True, exist_ok=True)
-
-        print(f"Copying {output_path} to {target_dir / lib_name}")
-        shutil.copy2(output_path, target_dir / lib_name)
+        _copy_library(output_path, target_dir)
 
 
 class BinaryDistribution(Distribution):
@@ -123,61 +121,13 @@ class install(install_base):
 
     def _build_and_install_libtomd(self) -> None:
         """Build Go library and copy to both build location and source tree."""
-        go_dir = ROOT / "go"
-        build_dir = ROOT / "build"
-
-        build_dir.mkdir(parents=True, exist_ok=True)
-
-        print("Downloading Go dependencies...")
-        try:
-            subprocess.check_call(["go", "mod", "download"], cwd=go_dir)
-        except subprocess.CalledProcessError as e:
-            print(f"Warning: Failed to download Go dependencies: {e}")
-
-        if sys.platform == "linux":
-            lib_ext = ".so"
-        elif sys.platform == "darwin":
-            lib_ext = ".dylib"
-        elif sys.platform == "win32":
-            lib_ext = ".dll"
-        else:
-            lib_ext = ".so"
-
-        lib_name = f"lib{LIB_BASENAME}{lib_ext}"
-        output_path = build_dir / lib_name
-
-        print(f"Building Go shared library: {lib_name}")
-        build_cmd = [
-            "go",
-            "build",
-            "-buildmode=c-shared",
-            "-o",
-            str(output_path),
-            "./cmd/tojson",
-        ]
-
-        env = os.environ.copy()
-
-        try:
-            subprocess.check_call(build_cmd, cwd=go_dir, env=env)
-        except subprocess.CalledProcessError as e:
-            print(f"Error building Go library: {e}")
-            raise
-
-        if not output_path.exists():
-            raise FileNotFoundError(
-                f"Go build succeeded but library not found at {output_path}"
-            )
+        output_path = _build_shared_library()
 
         source_lib_dir = ROOT / PACKAGENAME / "lib"
-        source_lib_dir.mkdir(parents=True, exist_ok=True)
-        print(f"Copying {output_path} to {source_lib_dir / lib_name} (source tree)")
-        shutil.copy2(output_path, source_lib_dir / lib_name)
+        _copy_library(output_path, source_lib_dir, suffix="(source tree)")
 
         target_dir = Path(self.build_lib) / PACKAGENAME / "lib"
-        target_dir.mkdir(parents=True, exist_ok=True)
-        print(f"Copying {output_path} to {target_dir / lib_name} (build tree)")
-        shutil.copy2(output_path, target_dir / lib_name)
+        _copy_library(output_path, target_dir, suffix="(build tree)")
 
 
 if __name__ == "__main__":

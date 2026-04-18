@@ -76,24 +76,25 @@ class ConversionResult:
             data = json.load(f)
             return data if isinstance(data, list) else []
 
+    def _iter_page_data(self) -> Iterator[list[Any]]:
+        for page in self._load():
+            if isinstance(page, dict) and isinstance(page.get("data"), list):
+                yield page["data"]
+
     @cached_property
     def markdown(self) -> str:
         from ._block_converter import block_to_markdown
 
-        markdowns = []
-        for page in self._load():
-            if isinstance(page, dict) and isinstance(page.get("data"), list):
-                page_md = "\n".join(
-                    m for m in [block_to_markdown(b) for b in page["data"]] if m
-                )
-                if page_md:
-                    markdowns.append(page_md)
-        return "\n---\n\n".join(markdowns)
+        pages = (
+            "\n".join(filter(None, (block_to_markdown(block) for block in data)))
+            for data in self._iter_page_data()
+        )
+        return "\n---\n\n".join(page for page in pages if page)
 
     def collect(self) -> "Pages":
         from .models import Page, Pages
 
-        pages = Pages([Page(p["data"]) for p in self._load()])
+        pages = Pages([Page(data) for data in self._iter_page_data()])
         log.info("collected %d pages", len(pages))
         return pages
 
@@ -104,7 +105,8 @@ class ConversionResult:
         with open(self.path, encoding="utf-8") as f:
             for i, p in enumerate(ijson.items(f, "item")):
                 log.debug("page %d", i + 1)
-                yield Page(p["data"])
+                if isinstance(p, dict) and isinstance(p.get("data"), list):
+                    yield Page(p["data"])
 
     def __repr__(self) -> str:
         return f"ConversionResult({self.path})"

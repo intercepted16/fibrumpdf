@@ -7,7 +7,7 @@ import logging
 from functools import cached_property
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 log = logging.getLogger(__name__)
 
@@ -26,19 +26,19 @@ class Span(BaseModel):
 
 class TableCell(BaseModel):
     bbox: list[float]
-    spans: list[Span] = []
+    spans: list[Span] = Field(default_factory=list)
 
 
 class TableRow(BaseModel):
     bbox: list[float]
-    cells: list[TableCell] = []
+    cells: list[TableCell] = Field(default_factory=list)
 
 
 class Block(BaseModel):
     model_config = ConfigDict(extra="allow")
     type: str
     bbox: list[float]
-    spans: list[Span] = []
+    spans: list[Span] = Field(default_factory=list)
     length: int = 0
     lines: int | None = None
     level: int | None = None
@@ -57,15 +57,14 @@ class Block(BaseModel):
 class Page(list[Block]):
     def __init__(self, items: list[Block | dict[str, Any]] | dict[str, Any]):
         super().__init__()
-        if isinstance(items, dict) and "data" in items:
-            items = items["data"]
-        for item in items or []:
-            self.append(Block(**item) if isinstance(item, dict) else item)  # type: ignore
+        source = items.get("data", []) if isinstance(items, dict) else items
+        for item in source or []:
+            self.append(Block(**item) if isinstance(item, dict) else item)
         log.debug("page: %d blocks", len(self))
 
     @cached_property
     def markdown(self) -> str:
-        return "\n".join(b.markdown for b in self if b.markdown)
+        return "\n".join(filter(None, (block.markdown for block in self)))
 
 
 class Pages(list[Page]):
@@ -74,4 +73,4 @@ class Pages(list[Page]):
 
     @cached_property
     def markdown(self) -> str:
-        return "\n---\n\n".join(p.markdown for p in self if p.markdown)
+        return "\n---\n\n".join(filter(None, (page.markdown for page in self)))

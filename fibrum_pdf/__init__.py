@@ -19,32 +19,23 @@ __all__ = [
 ]
 logging.getLogger(__name__).addHandler(logging.NullHandler())
 
+_EXPORTS = {
+    "to_json": (".api", "to_json"),
+    "ExtractionError": (".api", "ExtractionError"),
+    "ConversionResult": (".api", "ConversionResult"),
+    "Block": (".models", "Block"),
+    "Page": (".models", "Page"),
+    "Pages": (".models", "Pages"),
+}
+
 
 def __getattr__(name: str) -> Any:
-    if name == "to_json":
-        from .api import to_json
+    import importlib
 
-        return to_json
-    if name == "ExtractionError":
-        from .api import ExtractionError
-
-        return ExtractionError
-    if name == "ConversionResult":
-        from .api import ConversionResult
-
-        return ConversionResult
-    if name == "Block":
-        from .models import Block
-
-        return Block
-    if name == "Page":
-        from .models import Page
-
-        return Page
-    if name == "Pages":
-        from .models import Pages
-
-        return Pages
+    if target := _EXPORTS.get(name):
+        module_name, attr_name = target
+        module = importlib.import_module(module_name, __name__)
+        return getattr(module, attr_name)
     raise AttributeError(name)
 
 
