@@ -21,6 +21,23 @@ dev = [
     "typer",
     "build",
 ]
+benchmark = [
+    "datasets",
+    "docling",
+    "altair",
+    "apted",
+    "lxml",
+    "mistune",
+    "polars",
+    "pymupdf",
+    "pymupdf4llm",
+    "python-Levenshtein",
+    "rapidfuzz",
+    "rich",
+    "scipy",
+    "typer",
+    "fibrum-pdf"
+]
 
 [project.urls]
 Homepage = "https://github.com/intercepted16/fibrumpdf"

@@ -89,3 +89,8 @@ lib/
 dev/
 
 .uv-cache/
+
+benchmark/data
+benchmark/results/_shards
+benchmark/results/markdown
+*.parquet
