@@ -19,6 +19,18 @@ log = logging.getLogger(__name__)
 _capture_file: str | None = None
 
 
+def _native_log_tail() -> str:
+    path = Path(tempfile.gettempdir()) / "fibrum-pdf.log"
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return ""
+    if not text:
+        return ""
+    lines = text.splitlines()
+    return "\n".join(lines[-40:])
+
+
 def _capture_path() -> str:
     global _capture_file
     if _capture_file is None:
@@ -125,14 +137,20 @@ def to_json(
     with _redirect_c_output() as cap:
         rc = _lib(lib_path).pdf_to_json(str(pdf).encode(), str(out).encode())
     if rc != 0:
+        details = []
         try:
             with open(cap) as f:
                 msg = f.read().strip()
                 if msg:
                     log.error("c output:\n%s", msg)
+                    details.append(msg)
         except OSError:
             pass
-        raise ExtractionError(f"extraction failed (code {rc})")
+        if native_log := _native_log_tail():
+            log.error("native log:\n%s", native_log)
+            details.append(native_log)
+        suffix = f"\n{chr(10).join(details)}" if details else ""
+        raise ExtractionError(f"extraction failed (code {rc}){suffix}")
     log.info("done")
     return ConversionResult(out)
 

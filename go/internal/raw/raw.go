@@ -2,7 +2,8 @@ package raw
 
 /*
 #cgo CFLAGS: -I${SRCDIR} -I${SRCDIR}/../../../mupdf/include
-#cgo LDFLAGS: -L${SRCDIR}/../../../lib/mupdf -lmupdf -lm -lpthread
+#cgo !windows LDFLAGS: -L${SRCDIR}/../../../lib/mupdf -lmupdf -lm -lpthread
+#cgo windows LDFLAGS: -L${SRCDIR}/../../../lib/mupdf -l:libmupdf.dll.a
 
 #include "raw.h"
 #include <stdlib.h>
@@ -10,6 +11,7 @@ package raw
 import "C"
 import (
 	"errors"
+	"path/filepath"
 	"unsafe"
 
 	"github.com/fibrumpdf/go/internal/logger"
@@ -18,6 +20,7 @@ import (
 var Logger = logger.GetLogger("raw")
 
 func ExtractAllPagesRaw(pdfPath string) (string, error) {
+	pdfPath = filepath.ToSlash(pdfPath)
 	Logger.Debug("extracting all pages", "pdfPath", pdfPath)
 	cpath := C.CString(pdfPath)
 	defer C.free(unsafe.Pointer(cpath))

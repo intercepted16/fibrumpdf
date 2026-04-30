@@ -11,12 +11,16 @@
 #include <ctype.h>
 #include <stdio.h>
 #include <time.h>
+#ifdef _WIN32
+#include <windows.h>
+#else
 #include <unistd.h>
 #include <sys/wait.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/mman.h>
 #include <pthread.h>
+#endif
 #include <math.h>
 
 #define EDGE_MIN_LENGTH 3.0
@@ -41,7 +45,9 @@ typedef struct {
 
 #define FONT_CACHE_SIZE 256
 typedef struct {
+#ifndef _WIN32
     pthread_mutex_t lock;
+#endif
     font_cache_entry entries[FONT_CACHE_SIZE];
     int len;
 } shared_font_cache;
@@ -87,8 +93,27 @@ static unsigned char infer_style_from_font_name(const char* name) {
     return flags;
 }
 
+static unsigned char compute_font_flags(fz_context* ctx, fz_font* f) {
+    unsigned char flags = 0;
+    if (!f)
+        return flags;
+
+    fz_font_flags_t* ff = fz_font_flags(f);
+    if (fz_font_is_bold(ctx, f)) flags |= 1;
+    if (fz_font_is_italic(ctx, f)) flags |= 2;
+    if (fz_font_is_monospaced(ctx, f)) flags |= 4;
+    if (ff && ff->fake_bold) flags |= 1;
+    if (ff && ff->fake_italic) flags |= 2;
+    flags |= infer_style_from_font_name(fz_font_name(ctx, f));
+    return flags;
+}
+
 /* Initialize shared font cache (call in parent before fork) */
 static int init_shared_font_cache(void) {
+#ifdef _WIN32
+    global_font_cache = calloc(1, sizeof(shared_font_cache));
+    return global_font_cache ? 0 : -1;
+#else
     global_font_cache = mmap(NULL, sizeof(shared_font_cache), 
                              PROT_READ | PROT_WRITE, 
                              MAP_SHARED | MAP_ANONYMOUS, 
@@ -110,40 +135,44 @@ static int init_shared_font_cache(void) {
 
     global_font_cache->len = 0;
     return 0;
+#endif
 }
 
 /* Cleanup shared font cache (call after all workers finish) */
 static void cleanup_shared_font_cache(void) {
     if (!global_font_cache)
         return;
+#ifdef _WIN32
+    free(global_font_cache);
+#else
     pthread_mutex_destroy(&global_font_cache->lock);
     munmap(global_font_cache, sizeof(shared_font_cache));
+#endif
     global_font_cache = NULL;
 }
 
 /* Lookup or add font to shared cache. Returns flags for the font. */
 static unsigned char get_font_flags(fz_context* ctx, fz_font* f) {
-    if (!f || !global_font_cache)
+    if (!f)
         return 0;
+    if (!global_font_cache)
+        return compute_font_flags(ctx, f);
 
+#ifndef _WIN32
     pthread_mutex_lock(&global_font_cache->lock);
+#endif
 
     for (int i = 0; i < global_font_cache->len; i++) {
         if (global_font_cache->entries[i].font == f) {
             unsigned char flags = global_font_cache->entries[i].flags;
+#ifndef _WIN32
             pthread_mutex_unlock(&global_font_cache->lock);
+#endif
             return flags;
         }
     }
 
-    unsigned char flags = 0;
-    fz_font_flags_t* ff = fz_font_flags(f);
-    if (fz_font_is_bold(ctx, f)) flags |= 1;
-    if (fz_font_is_italic(ctx, f)) flags |= 2;
-    if (fz_font_is_monospaced(ctx, f)) flags |= 4;
-    if (ff && ff->fake_bold) flags |= 1;
-    if (ff && ff->fake_italic) flags |= 2;
-    flags |= infer_style_from_font_name(fz_font_name(ctx, f));
+    unsigned char flags = compute_font_flags(ctx, f);
 
     if (global_font_cache->len < FONT_CACHE_SIZE) {
         global_font_cache->entries[global_font_cache->len].font = f;
@@ -151,7 +180,9 @@ static unsigned char get_font_flags(fz_context* ctx, fz_font* f) {
         global_font_cache->len++;
     }
 
+#ifndef _WIN32
     pthread_mutex_unlock(&global_font_cache->lock);
+#endif
     return flags;
 }
 
@@ -689,23 +720,38 @@ char* extract_all_pages(const char* pdf_path)
         return NULL;
 
     char* temp_dir = malloc(256);
-    if (!temp_dir)
+    if (!temp_dir) {
+        fprintf(stderr, "fibrum_pdf: failed to allocate temp dir buffer\n");
         return NULL;
+    }
 
+#ifdef _WIN32
+    char base_dir[MAX_PATH];
+    DWORD base_len = GetTempPathA((DWORD)sizeof(base_dir), base_dir);
+    if (base_len == 0 || base_len >= sizeof(base_dir)) {
+        fprintf(stderr, "fibrum_pdf: GetTempPathA failed: %lu\n", GetLastError());
+        free(temp_dir);
+        return NULL;
+    }
+    snprintf(temp_dir, 256, "%sfibrum_pdf_%ld_%u_XXXXXX", base_dir, (long)time(NULL), (unsigned)getpid());
+#else
     snprintf(temp_dir, 256, "/tmp/fibrum_pdf_%ld_%u_XXXXXX", (long)time(NULL), (unsigned)getpid());
+#endif
     if (!mkdtemp(temp_dir)) {
+        fprintf(stderr, "fibrum_pdf: failed to create temp dir '%s': %s\n", temp_dir, strerror(errno));
         free(temp_dir);
         return NULL;
     }
 
     fz_context* ctx = fz_new_context(NULL, NULL, FZ_STORE_SIZE);
-    fz_set_warning_callback(ctx, mupdf_warning_callback, NULL);
-    fz_set_error_callback(ctx, mupdf_error_callback, NULL);
-
     if (!ctx) {
-        cleanup_shared_font_cache();        free(temp_dir);
+        fprintf(stderr, "fibrum_pdf: failed to create MuPDF context\n");
+        cleanup_shared_font_cache();
+        free(temp_dir);
         return NULL;
     }
+    fz_set_warning_callback(ctx, mupdf_warning_callback, NULL);
+    fz_set_error_callback(ctx, mupdf_error_callback, NULL);
 
     fz_document* doc = NULL;
     int page_count = 0;
@@ -719,6 +765,7 @@ char* extract_all_pages(const char* pdf_path)
     }
     fz_catch(ctx)
     {
+        fprintf(stderr, "fibrum_pdf: failed to open/count '%s': %s\n", pdf_path, fz_caught_message(ctx));
         error = 1;
     }
 
@@ -730,9 +777,13 @@ char* extract_all_pages(const char* pdf_path)
         return NULL;
     }
 
+#ifdef _WIN32
+    int num_workers = 1;
+#else
     int num_workers = sysconf(_SC_NPROCESSORS_ONLN);
     if (num_workers <= 0)
         num_workers = 4;
+#endif
 
     if (num_workers > page_count)
         num_workers = page_count;
@@ -765,6 +816,12 @@ char* extract_all_pages(const char* pdf_path)
         return temp_dir;
     }
 
+#ifdef _WIN32
+    if (doc)
+        fz_drop_document(ctx, doc);
+    fz_drop_context(ctx);
+    return temp_dir;
+#else
     if (init_shared_font_cache() != 0) {
         if (doc)
             fz_drop_document(ctx, doc);
@@ -846,6 +903,7 @@ char* extract_all_pages(const char* pdf_path)
     free(pids);
     
     return temp_dir;
+#endif
 }
 
 int read_page(const char* filepath, page_data* out)
@@ -876,13 +934,17 @@ int read_page(const char* filepath, page_data* out)
     out->edge_count = edge_count;
     out->link_count = link_count;
 
-    out->blocks = malloc(out->block_count * sizeof(fblock));
-    out->lines = malloc(out->line_count * sizeof(fline));
-    out->chars = malloc(out->char_count * sizeof(fchar));
-    out->edges = malloc(out->edge_count * sizeof(edge));
-    out->links = malloc(out->link_count * sizeof(flink));
+    out->blocks = out->block_count > 0 ? malloc(out->block_count * sizeof(fblock)) : NULL;
+    out->lines = out->line_count > 0 ? malloc(out->line_count * sizeof(fline)) : NULL;
+    out->chars = out->char_count > 0 ? malloc(out->char_count * sizeof(fchar)) : NULL;
+    out->edges = out->edge_count > 0 ? malloc(out->edge_count * sizeof(edge)) : NULL;
+    out->links = out->link_count > 0 ? malloc(out->link_count * sizeof(flink)) : NULL;
 
-    if (!out->blocks || !out->lines || !out->chars || !out->edges || !out->links)
+    if ((out->block_count > 0 && !out->blocks) ||
+        (out->line_count > 0 && !out->lines) ||
+        (out->char_count > 0 && !out->chars) ||
+        (out->edge_count > 0 && !out->edges) ||
+        (out->link_count > 0 && !out->links))
     {
         free_page(out);
         fclose(in);
