@@ -73,14 +73,79 @@ jobs:
         run: |
           uvx cibuildwheel==3.3.0 --output-dir dist
 
+      - name: Check wheel file sizes
+        shell: python
+        run: |
+          from pathlib import Path
+
+          limit = 100_000_000
+          wheels = sorted(Path("dist").glob("*.whl"))
+          if not wheels:
+              raise SystemExit("No wheels were built")
+
+          too_large = []
+          for wheel in wheels:
+              size = wheel.stat().st_size
+              print(f"{wheel.name}: {size / 1_000_000:.1f} MB")
+              if size >= limit:
+                  too_large.append((wheel.name, size))
+
+          if too_large:
+              for name, size in too_large:
+                  print(f"ERROR: {name} is {size} bytes, above PyPI's 100 MB file limit")
+              raise SystemExit(1)
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: dist-${{ matrix.os }}
           path: dist/*.whl
 
-  publish:
+  validate-dist:
     needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: dist-*
+          merge-multiple: true
+
+      - name: Check release file sizes
+        shell: python
+        run: |
+          from pathlib import Path
+
+          file_limit = 100_000_000
+          total_limit = 1_000_000_000
+          wheels = sorted(Path("dist").glob("*.whl"))
+          if not wheels:
+              raise SystemExit("No wheels were downloaded")
+
+          total = 0
+          too_large = []
+          for wheel in wheels:
+              size = wheel.stat().st_size
+              total += size
+              print(f"{wheel.name}: {size / 1_000_000:.1f} MB")
+              if size >= file_limit:
+                  too_large.append((wheel.name, size))
+
+          print(f"Total wheel size: {total / 1_000_000:.1f} MB")
+
+          if too_large:
+              for name, size in too_large:
+                  print(f"ERROR: {name} is {size} bytes, above PyPI's 100 MB file limit")
+              raise SystemExit(1)
+
+          if total >= total_limit:
+              raise SystemExit(
+                  f"Total wheel size is {total} bytes, above the 1 GB release budget"
+              )
+
+  publish:
+    needs: validate-dist
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
