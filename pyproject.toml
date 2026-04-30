@@ -8,7 +8,7 @@ version = "1.1.2"
 description = "A fast PDF extractor; a 500 pages/s alternative to Marker, Docling, PyMUPDF4LLM & others."
 authors = [{ name = "Adit Bajaj" }]
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 license = "AGPL-3.0"
 dependencies = [
     "pydantic",
@@ -50,9 +50,9 @@ fibrum-pdf = "fibrum_pdf.main:main"
 [tool.cibuildwheel]
 skip = ["*-musllinux*", "*i686*", "*aarch64*"]
 build = [
-    "cp3{9,10,11,12,13,14}-manylinux_x86_64",
-    "cp3{9,10,11,12,13,14}-macosx_arm64",
-    "cp3{9,10,11,12,13,14}-win_amd64"
+    "cp3{11,12,13,14}-manylinux_x86_64",
+    "cp3{11,12,13,14}-macosx_arm64",
+    "cp3{11,12,13,14}-win_amd64"
 ]
 
 
