@@ -16,6 +16,60 @@ ROOT = Path(__file__).parent.resolve()
 PACKAGENAME = "fibrum_pdf"
 TARGET_NAME = "tomd"
 LIB_BASENAME = "tomd"
+MUPDF_DIR = ROOT / "lib" / "mupdf"
+
+
+def platform_lib_name() -> str:
+    if sys.platform == "linux":
+        return f"lib{LIB_BASENAME}.so"
+    if sys.platform == "darwin":
+        return f"lib{LIB_BASENAME}.dylib"
+    if sys.platform == "win32":
+        return f"lib{LIB_BASENAME}.dll"
+    return f"lib{LIB_BASENAME}.so"
+
+
+def platform_runtime_patterns() -> list[str]:
+    if sys.platform == "linux":
+        return ["libmupdf.so*"]
+    if sys.platform == "darwin":
+        return ["libmupdf*.dylib*"]
+    if sys.platform == "win32":
+        return ["libmupdf*.dll"]
+    return ["libmupdf*"]
+
+
+def build_env() -> dict[str, str]:
+    env = os.environ.copy()
+    if MUPDF_DIR.exists():
+        if sys.platform == "win32":
+            env["PATH"] = f"{MUPDF_DIR}{os.pathsep}{env.get('PATH', '')}"
+        elif sys.platform == "darwin":
+            env["DYLD_LIBRARY_PATH"] = (
+                f"{MUPDF_DIR}{os.pathsep}{env.get('DYLD_LIBRARY_PATH', '')}"
+            )
+        else:
+            env["LD_LIBRARY_PATH"] = (
+                f"{MUPDF_DIR}{os.pathsep}{env.get('LD_LIBRARY_PATH', '')}"
+            )
+    return env
+
+
+def copy_mupdf_runtime_deps(target_dir: Path) -> None:
+    if not MUPDF_DIR.exists():
+        return
+    copied = False
+    for pattern in platform_runtime_patterns():
+        for dep in MUPDF_DIR.glob(pattern):
+            if dep.is_file():
+                print(f"Copying MuPDF runtime dependency {dep} to {target_dir / dep.name}")
+                shutil.copy2(dep, target_dir / dep.name)
+                copied = True
+    if sys.platform == "win32" and not copied:
+        raise FileNotFoundError(
+            f"Windows builds require libmupdf.dll in {MUPDF_DIR}. "
+            "Download it from the mupdf-prebuilts release before building."
+        )
 
 
 class build_py(build_py_base):
@@ -37,16 +91,7 @@ class build_py(build_py_base):
         except subprocess.CalledProcessError as e:
             print(f"Warning: Failed to download Go dependencies: {e}")
 
-        if sys.platform == "linux":
-            lib_ext = ".so"
-        elif sys.platform == "darwin":
-            lib_ext = ".dylib"
-        elif sys.platform == "win32":
-            lib_ext = ".dll"
-        else:
-            lib_ext = ".so"
-
-        lib_name = f"lib{LIB_BASENAME}{lib_ext}"
+        lib_name = platform_lib_name()
         output_path = build_dir / lib_name
 
         print(f"Building Go shared library: {lib_name}")
@@ -59,7 +104,7 @@ class build_py(build_py_base):
             "./cmd/tojson",
         ]
 
-        env = os.environ.copy()
+        env = build_env()
 
         try:
             subprocess.check_call(build_cmd, cwd=go_dir, env=env)
@@ -77,6 +122,7 @@ class build_py(build_py_base):
 
         print(f"Copying {output_path} to {target_dir / lib_name}")
         shutil.copy2(output_path, target_dir / lib_name)
+        copy_mupdf_runtime_deps(target_dir)
 
 
 class BinaryDistribution(Distribution):
@@ -134,16 +180,7 @@ class install(install_base):
         except subprocess.CalledProcessError as e:
             print(f"Warning: Failed to download Go dependencies: {e}")
 
-        if sys.platform == "linux":
-            lib_ext = ".so"
-        elif sys.platform == "darwin":
-            lib_ext = ".dylib"
-        elif sys.platform == "win32":
-            lib_ext = ".dll"
-        else:
-            lib_ext = ".so"
-
-        lib_name = f"lib{LIB_BASENAME}{lib_ext}"
+        lib_name = platform_lib_name()
         output_path = build_dir / lib_name
 
         print(f"Building Go shared library: {lib_name}")
@@ -156,7 +193,7 @@ class install(install_base):
             "./cmd/tojson",
         ]
 
-        env = os.environ.copy()
+        env = build_env()
 
         try:
             subprocess.check_call(build_cmd, cwd=go_dir, env=env)
@@ -173,18 +210,22 @@ class install(install_base):
         source_lib_dir.mkdir(parents=True, exist_ok=True)
         print(f"Copying {output_path} to {source_lib_dir / lib_name} (source tree)")
         shutil.copy2(output_path, source_lib_dir / lib_name)
+        copy_mupdf_runtime_deps(source_lib_dir)
 
         target_dir = Path(self.build_lib) / PACKAGENAME / "lib"
         target_dir.mkdir(parents=True, exist_ok=True)
         print(f"Copying {output_path} to {target_dir / lib_name} (build tree)")
         shutil.copy2(output_path, target_dir / lib_name)
+        copy_mupdf_runtime_deps(target_dir)
 
 
 if __name__ == "__main__":
     setup(
         name=PACKAGENAME,
         packages=[PACKAGENAME],
-        package_data={PACKAGENAME: ["lib/*.so", "lib/*.dylib", "lib/*.dll"]},
+        package_data={
+            PACKAGENAME: ["lib/*.so", "lib/*.so.*", "lib/*.dylib", "lib/*.dll"]
+        },
         cmdclass={"build_py": build_py, "bdist_wheel": bdist_wheel, "install": install},
         distclass=BinaryDistribution,
     )

@@ -51,7 +51,8 @@ fibrum-pdf = "fibrum_pdf.main:main"
 skip = ["*-musllinux*", "*i686*", "*aarch64*"]
 build = [
     "cp3{9,10,11,12,13,14}-manylinux_x86_64",
-    "cp3{9,10,11,12,13,14}-macosx_arm64"
+    "cp3{9,10,11,12,13,14}-macosx_arm64",
+    "cp3{9,10,11,12,13,14}-win_amd64"
 ]
 
 

@@ -2,7 +2,8 @@ package raw
 
 /*
 #cgo CFLAGS: -I${SRCDIR} -I${SRCDIR}/../../../mupdf/include
-#cgo LDFLAGS: -L${SRCDIR}/../../../lib/mupdf -lmupdf -lm -lpthread
+#cgo !windows LDFLAGS: -L${SRCDIR}/../../../lib/mupdf -lmupdf -lm -lpthread
+#cgo windows LDFLAGS: -L${SRCDIR}/../../../lib/mupdf -l:libmupdf.dll
 
 #include "raw.h"
 #include <stdlib.h>

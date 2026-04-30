@@ -53,12 +53,17 @@ def find_library() -> Path | None:
 @lru_cache(maxsize=1)
 def load_library(path: Path) -> ctypes.CDLL:
     log.debug("loading %s", path)
-    if sys.platform != "win32":
-        for d in [
-            path.parent,
-            path.parent.parent.parent / "lib" / "mupdf",
-            Path(__file__).resolve().parent.parent / "lib" / "mupdf",
-        ]:
+    dependency_dirs = [
+        path.parent,
+        path.parent.parent.parent / "lib" / "mupdf",
+        Path(__file__).resolve().parent.parent / "lib" / "mupdf",
+    ]
+    if sys.platform == "win32":
+        for d in dependency_dirs:
+            if d.exists() and hasattr(os, "add_dll_directory"):
+                os.add_dll_directory(str(d))
+    else:
+        for d in dependency_dirs:
             if d.exists():
                 for mupdf in sorted(d.glob("libmupdf.so.*"), reverse=True) or list(
                     d.glob("libmupdf.so")
