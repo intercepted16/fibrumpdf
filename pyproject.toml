@@ -66,8 +66,8 @@ before-all = [
     "tar -C /usr/local -xzf go1.24.0.linux-amd64.tar.gz",
     "/usr/local/go/bin/go version",
     "mkdir -p lib/mupdf",
-    "curl -L -o lib/mupdf/libmupdf.so https://github.com/intercepted16/mupdf-prebuilts/releases/download/mupdf-1.27.0/libmupdf.so",
     "curl -L -o lib/mupdf/libmupdf.so.27.0 https://github.com/intercepted16/mupdf-prebuilts/releases/download/mupdf-1.27.0/libmupdf.so.27.0",
+    "ln -sf libmupdf.so.27.0 lib/mupdf/libmupdf.so",
     "chmod +x lib/mupdf/*.so*"
 ]
 repair-wheel-command = "auditwheel repair -w {dest_dir} --plat manylinux_2_28_x86_64 {wheel}"
