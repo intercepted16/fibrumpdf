@@ -11,11 +11,11 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = "AGPL-3.0"
 dependencies = [
-    "pydantic>=2",
-    "ijson>=3",
-    "typer>=0.12",
-    "rich>=13",
-    "shellingham>=1.5",
+    "pydantic",
+    "ijson",
+    "typer",
+    "rich",
+    "shellingham",
 ]
 
 [project.optional-dependencies]
