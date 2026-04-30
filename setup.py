@@ -31,7 +31,7 @@ def platform_lib_name() -> str:
 
 def platform_runtime_patterns() -> list[str]:
     if sys.platform == "linux":
-        return ["libmupdf.so*"]
+        return ["libmupdf.so.*"]
     if sys.platform == "darwin":
         return ["libmupdf*.dylib*"]
     if sys.platform == "win32":
@@ -58,6 +58,10 @@ def build_env() -> dict[str, str]:
 def copy_mupdf_runtime_deps(target_dir: Path) -> None:
     if not MUPDF_DIR.exists():
         return
+    if sys.platform == "linux":
+        for stale_dep in target_dir.glob("libmupdf.so*"):
+            if stale_dep.is_file() or stale_dep.is_symlink():
+                stale_dep.unlink()
     copied = False
     for pattern in platform_runtime_patterns():
         for dep in MUPDF_DIR.glob(pattern):
