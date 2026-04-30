@@ -720,13 +720,16 @@ char* extract_all_pages(const char* pdf_path)
         return NULL;
 
     char* temp_dir = malloc(256);
-    if (!temp_dir)
+    if (!temp_dir) {
+        fprintf(stderr, "fibrum_pdf: failed to allocate temp dir buffer\n");
         return NULL;
+    }
 
 #ifdef _WIN32
     char base_dir[MAX_PATH];
     DWORD base_len = GetTempPathA((DWORD)sizeof(base_dir), base_dir);
     if (base_len == 0 || base_len >= sizeof(base_dir)) {
+        fprintf(stderr, "fibrum_pdf: GetTempPathA failed: %lu\n", GetLastError());
         free(temp_dir);
         return NULL;
     }
@@ -735,18 +738,20 @@ char* extract_all_pages(const char* pdf_path)
     snprintf(temp_dir, 256, "/tmp/fibrum_pdf_%ld_%u_XXXXXX", (long)time(NULL), (unsigned)getpid());
 #endif
     if (!mkdtemp(temp_dir)) {
+        fprintf(stderr, "fibrum_pdf: failed to create temp dir '%s': %s\n", temp_dir, strerror(errno));
         free(temp_dir);
         return NULL;
     }
 
     fz_context* ctx = fz_new_context(NULL, NULL, FZ_STORE_SIZE);
-    fz_set_warning_callback(ctx, mupdf_warning_callback, NULL);
-    fz_set_error_callback(ctx, mupdf_error_callback, NULL);
-
     if (!ctx) {
-        cleanup_shared_font_cache();        free(temp_dir);
+        fprintf(stderr, "fibrum_pdf: failed to create MuPDF context\n");
+        cleanup_shared_font_cache();
+        free(temp_dir);
         return NULL;
     }
+    fz_set_warning_callback(ctx, mupdf_warning_callback, NULL);
+    fz_set_error_callback(ctx, mupdf_error_callback, NULL);
 
     fz_document* doc = NULL;
     int page_count = 0;
@@ -760,6 +765,7 @@ char* extract_all_pages(const char* pdf_path)
     }
     fz_catch(ctx)
     {
+        fprintf(stderr, "fibrum_pdf: failed to open/count '%s': %s\n", pdf_path, fz_caught_message(ctx));
         error = 1;
     }
 
@@ -928,13 +934,17 @@ int read_page(const char* filepath, page_data* out)
     out->edge_count = edge_count;
     out->link_count = link_count;
 
-    out->blocks = malloc(out->block_count * sizeof(fblock));
-    out->lines = malloc(out->line_count * sizeof(fline));
-    out->chars = malloc(out->char_count * sizeof(fchar));
-    out->edges = malloc(out->edge_count * sizeof(edge));
-    out->links = malloc(out->link_count * sizeof(flink));
+    out->blocks = out->block_count > 0 ? malloc(out->block_count * sizeof(fblock)) : NULL;
+    out->lines = out->line_count > 0 ? malloc(out->line_count * sizeof(fline)) : NULL;
+    out->chars = out->char_count > 0 ? malloc(out->char_count * sizeof(fchar)) : NULL;
+    out->edges = out->edge_count > 0 ? malloc(out->edge_count * sizeof(edge)) : NULL;
+    out->links = out->link_count > 0 ? malloc(out->link_count * sizeof(flink)) : NULL;
 
-    if (!out->blocks || !out->lines || !out->chars || !out->edges || !out->links)
+    if ((out->block_count > 0 && !out->blocks) ||
+        (out->line_count > 0 && !out->lines) ||
+        (out->char_count > 0 && !out->chars) ||
+        (out->edge_count > 0 && !out->edges) ||
+        (out->link_count > 0 && !out->links))
     {
         free_page(out);
         fclose(in);

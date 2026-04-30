@@ -5,10 +5,16 @@ on:
     tags:
       - "v*.*.*"
   workflow_dispatch:
+    inputs:
+      windows-smoke-run-id:
+        description: "Run ID containing dist-windows-latest to smoke test on Windows"
+        required: false
+        default: ""
 
 jobs:
   build:
     name: Build wheels on ${{ matrix.os }}
+    if: inputs.windows-smoke-run-id == ''
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -54,6 +60,15 @@ jobs:
           Invoke-WebRequest `
             -Uri "https://github.com/intercepted16/mupdf-prebuilts/releases/download/mupdf-1.27.0/libmupdf.dll" `
             -OutFile "lib/mupdf/libmupdf.dll"
+          Invoke-WebRequest `
+            -Uri "https://github.com/intercepted16/mupdf-prebuilts/releases/download/mupdf-1.27.0/libmupdf.dll.a" `
+            -OutFile "lib/mupdf/libmupdf.dll.a"
+          Invoke-WebRequest `
+            -Uri "https://github.com/intercepted16/mupdf-prebuilts/releases/download/mupdf-1.27.0/libgcc_s_seh-1.dll" `
+            -OutFile "lib/mupdf/libgcc_s_seh-1.dll"
+          Invoke-WebRequest `
+            -Uri "https://github.com/intercepted16/mupdf-prebuilts/releases/download/mupdf-1.27.0/libwinpthread-1.dll" `
+            -OutFile "lib/mupdf/libwinpthread-1.dll"
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
@@ -69,6 +84,47 @@ jobs:
         with:
           name: dist-${{ matrix.os }}
           path: dist/*.whl
+
+  windows-smoke:
+    name: Smoke test Windows wheel
+    if: inputs.windows-smoke-run-id != ''
+    runs-on: windows-latest
+    permissions:
+      actions: read
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Download Windows wheel artifact
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download "${{ inputs.windows-smoke-run-id }}" `
+            --repo "${{ github.repository }}" `
+            --name dist-windows-latest `
+            --dir dist
+
+      - name: Install Windows wheel
+        shell: pwsh
+        run: |
+          $wheel = Get-ChildItem dist -Filter "*cp311*win_amd64.whl" | Select-Object -First 1
+          if (-not $wheel) {
+            throw "No cp311 win_amd64 wheel found in dist"
+          }
+          python -m pip install --upgrade pip
+          python -m pip install $wheel.FullName
+
+      - name: Run to_json smoke test
+        shell: pwsh
+        run: python test.py
 
   publish:
     needs: build
