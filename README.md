@@ -24,7 +24,7 @@ Written for Python, Go at the core, with a touch of C to interface with MuPDF.
 pip install fibrum-pdf
 ```
 
-> There are wheels for Python 3.9–3.14 (inclusive of minor versions) on macOS (ARM/x64) and all modern Linux distributions.
+> There are wheels for Python 3.9–3.14 (inclusive of minor versions) on macOS (ARM/x64) and all modern Linux distributions, and Windows x64.
 
 **To build from source**, see [BUILD.md](BUILD.md). 
 
