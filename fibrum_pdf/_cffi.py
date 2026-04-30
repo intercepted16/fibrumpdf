@@ -7,9 +7,11 @@ import logging
 import os
 import sys
 from functools import lru_cache
+from importlib import metadata
 from pathlib import Path
 
 log = logging.getLogger(__name__)
+_dll_directory_handles: list[object] = []
 
 
 @lru_cache(maxsize=1)
@@ -46,6 +48,20 @@ def find_library() -> Path | None:
                     if f.is_file():
                         return f.resolve()
 
+    try:
+        dist = metadata.distribution("fibrum-pdf")
+    except metadata.PackageNotFoundError:
+        dist = None
+
+    if dist is not None:
+        files = dist.files or []
+        for file in files:
+            if file.parts[-3:] == ("fibrum_pdf", "lib", lib_name):
+                f = Path(dist.locate_file(file))
+                if f.is_file():
+                    log.debug("found installed package library: %s", f)
+                    return f.resolve()
+
     log.warning("libtomd not found")
     return None
 
@@ -61,7 +77,9 @@ def load_library(path: Path) -> ctypes.CDLL:
     if sys.platform == "win32":
         for d in dependency_dirs:
             if d.exists() and hasattr(os, "add_dll_directory"):
-                os.add_dll_directory(str(d))
+                _dll_directory_handles.append(os.add_dll_directory(str(d)))
+            if d.exists():
+                os.environ["PATH"] = f"{d}{os.pathsep}{os.environ.get('PATH', '')}"
     else:
         for d in dependency_dirs:
             if d.exists():

@@ -35,7 +35,7 @@ def platform_runtime_patterns() -> list[str]:
     if sys.platform == "darwin":
         return ["libmupdf*.dylib*"]
     if sys.platform == "win32":
-        return ["libmupdf*.dll"]
+        return ["*.dll"]
     return ["libmupdf*"]
 
 
