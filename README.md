@@ -108,7 +108,7 @@ block_markdown = pages[0][0].markdown
 ### Command-line
 
 ```bash
-python -m fibrum_pdf.main input.pdf [output_dir]
+python -m fibrum_pdf.main input.pdf [output_path]
 ```
 
 ---
