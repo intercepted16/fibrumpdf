@@ -183,15 +183,37 @@ func (s postProcessStage) cleanSpans(spans []models.Span) []models.Span {
 	}
 	out := make([]models.Span, 0, len(spans))
 	for i := range spans {
-		spans[i].Text = textutil.NormalizeText(spans[i].Text)
+		spans[i].Text = textutil.NormalizeTextFragment(spans[i].Text)
 		if spans[i].Text == "" {
 			continue
 		}
-		if len(out) > 0 && out[len(out)-1].Style == spans[i].Style && out[len(out)-1].URI == spans[i].URI {
-			out[len(out)-1].Text += spans[i].Text
-			continue
+		if len(out) > 0 {
+			last := len(out) - 1
+			if startsWithSpace(spans[i].Text) && endsWithSpace(out[last].Text) {
+				spans[i].Text = strings.TrimLeftFunc(spans[i].Text, unicode.IsSpace)
+				if spans[i].Text == "" {
+					continue
+				}
+			}
+			if out[last].Style == spans[i].Style && out[last].URI == spans[i].URI {
+				out[last].Text += spans[i].Text
+				continue
+			}
 		}
 		out = append(out, spans[i])
 	}
+	if len(out) > 0 {
+		out[len(out)-1].Text = strings.TrimRightFunc(out[len(out)-1].Text, unicode.IsSpace)
+	}
 	return out
+}
+
+func startsWithSpace(text string) bool {
+	r, _ := utf8.DecodeRuneInString(text)
+	return r != utf8.RuneError && unicode.IsSpace(r)
+}
+
+func endsWithSpace(text string) bool {
+	r, _ := utf8.DecodeLastRuneInString(text)
+	return r != utf8.RuneError && unicode.IsSpace(r)
 }
