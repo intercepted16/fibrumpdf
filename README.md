@@ -2,15 +2,27 @@
 
 Extract 200+ pages per second on CPU.
 
-Gives you tables, text, and their formatting, plus lower level information like bounding boxes and font sizes.
+A lot of PDF tooling is either:
 
-It outputs JSON for programmatic use, but still allows for Markdown.
+- high quality but slow, GPU-heavy, or expensive (Azure Document Intelligence, Docling)
+- or very fast but focused mostly on raw text extraction (pdfium)
 
-Written for Python, Go at the core, with a touch of C to interface with MuPDF.
+This is basically an attempt to sit in the middle.
 
-- ~50×+ faster than pymupdf4llm and docling
-- Moderate drop in table precision/recall
-- Comparable structural extraction quality (TEDS)
+In other words, the goal is to keep useful structure, while pushing throughput much further than most structured extractors.
+
+It's not trying to beat ML-based systems on absolute extraction quality. Furthermore, you will notice it is behind on many cases.
+
+It gives you tables, text, and their formatting, plus lower level information like bounding boxes and font sizes. They may help you in certain features for RAG.
+
+It outputs JSON for programmatic use. But it allows for Markdown.
+
+It is written for Python. It uses Go for performance and a bit of C to interface with MuPDF.
+
+- 200×+ faster than Docling
+- 20x faster than Pymupdf4llm
+- About the same formatting quality,
+- With a drop in table recall and precision
 
 ![Speed](benchmark/results/speed.png)
 ![Quality](benchmark/results/quality.png)
