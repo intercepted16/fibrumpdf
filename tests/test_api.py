@@ -6,7 +6,9 @@ import ctypes
 import os
 from pathlib import Path
 
-from fibrum_pdf.api import _extract
+import pytest
+
+from fibrum_pdf.api import _extract, to_json
 
 
 class ModernLibrary:
@@ -50,3 +52,13 @@ def test_extract_captures_errors_from_legacy_libraries() -> None:
         _extract(LegacyLibrary(), Path("input.pdf"), Path("output.json"))
         == "legacy native failure"
     )
+
+
+def test_to_json_refuses_to_overwrite_input(tmp_path: Path) -> None:
+    pdf = tmp_path / "document.pdf"
+    pdf.write_bytes(b"%PDF-placeholder")
+
+    with pytest.raises(ValueError, match="must be different"):
+        to_json(pdf, pdf)
+
+    assert pdf.read_bytes() == b"%PDF-placeholder"

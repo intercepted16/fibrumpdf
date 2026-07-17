@@ -135,6 +135,8 @@ def to_json(
     if not pdf.exists():
         raise FileNotFoundError(f"pdf not found: {pdf}")
     out = Path(output).resolve() if output else pdf.with_suffix(".json")
+    if out.exists() and os.path.samefile(pdf, out):
+        raise ValueError("input and output must be different files")
     out.parent.mkdir(parents=True, exist_ok=True)
     log.info("extracting %s -> %s", pdf, out)
     if error := _extract(_lib(lib_path), pdf, out):
