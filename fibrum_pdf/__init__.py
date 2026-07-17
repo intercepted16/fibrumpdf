@@ -1,3 +1,5 @@
+"""Fast, structured PDF extraction for Python."""
+
 from __future__ import annotations
 
 import logging
@@ -6,12 +8,16 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .api import ConversionResult, ExtractionError, to_json
-    from .models import Block, Page, Pages
+    from .models import Block, ListItem, Page, Pages, Span, TableCell, TableRow
 
 __all__ = [
     "Block",
+    "ListItem",
     "Page",
     "Pages",
+    "Span",
+    "TableCell",
+    "TableRow",
     "ExtractionError",
     "to_json",
     "ConversionResult",
@@ -33,18 +39,10 @@ def __getattr__(name: str) -> Any:
         from .api import ConversionResult
 
         return ConversionResult
-    if name == "Block":
-        from .models import Block
+    if name in {"Block", "ListItem", "Page", "Pages", "Span", "TableCell", "TableRow"}:
+        from . import models
 
-        return Block
-    if name == "Page":
-        from .models import Page
-
-        return Page
-    if name == "Pages":
-        from .models import Pages
-
-        return Pages
+        return getattr(models, name)
     raise AttributeError(name)
 
 

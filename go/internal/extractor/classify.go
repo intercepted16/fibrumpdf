@@ -16,6 +16,7 @@ type classifiedBlock struct {
 	textChars    int
 	typ          models.BlockType
 	headingLevel int
+	listLines    []parsedListLine
 	spans        []models.Span
 }
 
@@ -46,6 +47,7 @@ func (s classifyStage) Run(ctx parseOutput, blocks []splitBlock) []classifiedBlo
 			textChars:    textChars,
 			typ:          typ,
 			headingLevel: level,
+			listLines:    b.listLines,
 			spans:        spans,
 		})
 	}

@@ -28,7 +28,7 @@ func (s postProcessStage) Run(ctx parseOutput, blocks []layoutBlock, tables []mo
 	for _, b := range blocks {
 		pb := postBlock{layoutBlock: b}
 		if pb.typ == models.BlockList {
-			items, listText := s.parseListItems(pb.text)
+			items, listText := s.parseListItems(pb.listLines)
 			if len(items) == 0 {
 				continue
 			}
@@ -60,16 +60,15 @@ func (s postProcessStage) Run(ctx parseOutput, blocks []layoutBlock, tables []mo
 	return out
 }
 
-func (s postProcessStage) parseListItems(text string) ([]models.ListItem, string) {
-	lines := strings.Split(text, "\n")
+func (s postProcessStage) parseListItems(lines []parsedListLine) ([]models.ListItem, string) {
 	items := make([]models.ListItem, 0, len(lines))
 	outLines := make([]string, 0, len(lines))
 	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
+		text := strings.TrimSpace(line.text)
+		if text == "" {
 			continue
 		}
-		kind, prefix, body := s.parseListLine(line)
+		kind, prefix, body := s.parseListLine(text)
 		if kind == listNone || body == "" {
 			continue
 		}
@@ -80,10 +79,37 @@ func (s postProcessStage) parseListItems(text string) ([]models.ListItem, string
 			marker = prefix
 		}
 		itemText := strings.TrimSpace(marker + " " + body)
-		items = append(items, models.ListItem{Spans: []models.Span{{Text: itemText}}, ListType: itemType, Indent: 0, Prefix: prefix})
+		items = append(items, models.ListItem{
+			Spans: s.listBodySpans(line.spans, text, body), ListType: itemType,
+			Indent: line.indent, Prefix: prefix,
+		})
 		outLines = append(outLines, itemText)
 	}
 	return items, strings.Join(outLines, "\n")
+}
+
+func (s postProcessStage) listBodySpans(spans []models.Span, line, body string) []models.Span {
+	bodyAt := strings.Index(line, body)
+	if bodyAt < 0 {
+		return []models.Span{{Text: body}}
+	}
+	drop := utf8.RuneCountInString(line[:bodyAt])
+	out := make([]models.Span, 0, len(spans))
+	for _, span := range spans {
+		runes := []rune(span.Text)
+		if drop >= len(runes) {
+			drop -= len(runes)
+			continue
+		}
+		span.Text = string(runes[drop:])
+		drop = 0
+		out = append(out, span)
+	}
+	if len(out) == 0 {
+		return []models.Span{{Text: body}}
+	}
+	out[len(out)-1].Text = strings.TrimRightFunc(out[len(out)-1].Text, unicode.IsSpace)
+	return out
 }
 
 type listKind uint8

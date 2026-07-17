@@ -84,17 +84,36 @@ def _table(rows: list[dict[str, Any]]) -> str:
 
 def _list(block: dict[str, Any], text: str) -> str:
     if items := block.get("items"):
-        lines = [
-            f"{'  ' * item.get('indent', 0)}{item.get('prefix', '-') + ' ' if item.get('prefix') else '- '}{t.strip()}"
-            for item in items
-            if (t := _join_spans(item.get("spans", [])))
-        ]
+        lines = []
+        for item in items:
+            if not (body := _join_spans(item.get("spans", [])).strip()):
+                continue
+            prefix = item.get("prefix")
+            marker = (
+                prefix
+                if isinstance(prefix, str) and prefix
+                else "1."
+                if item.get("list_type") == "numbered"
+                else "-"
+            )
+            indent = "    " * max(int(item.get("indent", 0)), 0)
+            lines.append(f"{indent}{marker} {body}")
         return "\n".join(lines) + "\n" if lines else ""
     return (
         "\n".join(f"- {ln.strip()}" for ln in text.split("\n") if ln.strip()) + "\n"
         if text
         else ""
     )
+
+
+def _heading(block: dict[str, Any], text: str) -> str:
+    level = max(1, min(int(block.get("level") or 1), 6))
+    if level >= 4:
+        plain = (block.get("text") or "").strip() or "".join(
+            str(span.get("text", "")) for span in block.get("spans", [])
+        ).strip()
+        return f"**{plain or text}**\n"
+    return f"{'#' * level} **{text}**\n"
 
 
 def block_to_markdown(block: dict[str, Any]) -> str:
@@ -104,22 +123,16 @@ def block_to_markdown(block: dict[str, Any]) -> str:
         return ""
 
     if typ == "heading":
-        level = max(1, min(int(block.get("level") or 1), 6))
-        if level >= 4:
-            plain = (block.get("text") or "").strip() or "".join(
-                str(span.get("text", "")) for span in block.get("spans", [])
-            ).strip()
-            return f"**{plain or text}**\n"
-        return f"{'#' * level} **{text}**\n"
-    elif typ in ("paragraph", "text"):
+        return _heading(block, text)
+    if typ in ("paragraph", "text"):
         return f"{text}\n"
-    elif typ == "code":
+    if typ == "code":
         return f"{text}\n"
-    elif typ == "table":
+    if typ == "table":
         return _table(block.get("rows", []))
-    elif typ == "list":
+    if typ == "list":
         return _list(block, text)
-    elif typ == "figure":
+    if typ == "figure":
         return f"![Figure]({block.get('text', 'figure')})\n"
     log.debug("skipping block type=%s", typ)
     return ""

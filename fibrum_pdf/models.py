@@ -7,7 +7,7 @@ import logging
 from functools import cached_property
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 log = logging.getLogger(__name__)
 
@@ -26,19 +26,26 @@ class Span(BaseModel):
 
 class TableCell(BaseModel):
     bbox: list[float]
-    spans: list[Span] = []
+    spans: list[Span] = Field(default_factory=list)
 
 
 class TableRow(BaseModel):
     bbox: list[float]
-    cells: list[TableCell] = []
+    cells: list[TableCell] = Field(default_factory=list)
+
+
+class ListItem(BaseModel):
+    spans: list[Span] = Field(default_factory=list)
+    list_type: str
+    indent: int = 0
+    prefix: str | bool = False
 
 
 class Block(BaseModel):
     model_config = ConfigDict(extra="allow")
     type: str
     bbox: list[float]
-    spans: list[Span] = []
+    spans: list[Span] = Field(default_factory=list)
     length: int = 0
     lines: int | None = None
     level: int | None = None
@@ -46,6 +53,7 @@ class Block(BaseModel):
     col_count: int | None = None
     cell_count: int | None = None
     rows: list[TableRow] | None = None
+    items: list[ListItem] | None = None
 
     @cached_property
     def markdown(self) -> str:

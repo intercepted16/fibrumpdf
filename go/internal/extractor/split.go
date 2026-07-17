@@ -19,7 +19,15 @@ type splitBlock struct {
 	italicCount int
 	monoCount   int
 	isList      bool
+	listLines   []parsedListLine
 	spans       []models.Span
+}
+
+type parsedListLine struct {
+	text   string
+	spans  []models.Span
+	x      float32
+	indent int
 }
 
 type splitStage struct{}
@@ -46,6 +54,7 @@ func (s splitStage) splitRawBlock(ctx parseOutput, lineStart, lineCount int) []s
 		var totalChars, boldChars, italicChars, monoChars int
 		var fontSizeSum, lastLineFontSize float32 = 0, -1
 		linesInSubBlock := 0
+		var listLines []parsedListLine
 		firstLine := ctx.lines[lineStart+lineIdx]
 		subBlockIsList := startsWithListMarker(firstLine.rawText)
 		for lineIdx < lineCount {
@@ -64,7 +73,7 @@ func (s splitStage) splitRawBlock(ctx parseOutput, lineStart, lineCount int) []s
 					break
 				}
 				sep := "\n"
-				if gap < avgLineFontSize*0.2 || gap < avgLineFontSize*1.4 {
+				if !subBlockIsList && gap < avgLineFontSize*1.4 {
 					sep = " "
 				}
 				textStr.WriteString(sep)
@@ -85,6 +94,11 @@ func (s splitStage) splitRawBlock(ctx parseOutput, lineStart, lineCount int) []s
 			monoChars += lineInfo.monoCount
 			textStr.WriteString(lineInfo.rawText)
 			spans = append(spans, lineInfo.spans...)
+			if subBlockIsList {
+				listLines = append(listLines, parsedListLine{
+					text: lineInfo.rawText, spans: lineInfo.spans, x: lineInfo.bbox.X0(),
+				})
+			}
 			lineIdx++
 		}
 		if totalChars == 0 {
@@ -94,6 +108,7 @@ func (s splitStage) splitRawBlock(ctx parseOutput, lineStart, lineCount int) []s
 		if len(spans) == 0 {
 			continue
 		}
+		s.normalizeListIndents(listLines, fontSizeSum/float32(totalChars))
 		result = append(result, splitBlock{
 			text:        text,
 			bbox:        subBBox,
@@ -104,10 +119,25 @@ func (s splitStage) splitRawBlock(ctx parseOutput, lineStart, lineCount int) []s
 			italicCount: italicChars,
 			monoCount:   monoChars,
 			isList:      subBlockIsList,
+			listLines:   listLines,
 			spans:       spans,
 		})
 	}
 	return result
+}
+
+func (s splitStage) normalizeListIndents(lines []parsedListLine, fontSize float32) {
+	if len(lines) == 0 {
+		return
+	}
+	minX := lines[0].x
+	for _, line := range lines[1:] {
+		minX = min(minX, line.x)
+	}
+	indentWidth := max(fontSize*1.5, 1)
+	for i := range lines {
+		lines[i].indent = max(0, int(math.Round(float64((lines[i].x-minX)/indentWidth))))
+	}
 }
 
 func (s splitStage) shouldStartNewBlock(prevSize, currSize, gap float32) bool {
