@@ -233,25 +233,6 @@ func tableBBoxFromRowsForTrim(rows []Row) geometry.Rect {
 	return bbox
 }
 
-func shouldPreserveEmptyColumns(tbl Table) bool {
-	if len(tbl.Rows) < 2 {
-		return false
-	}
-	lastCol := len(tbl.Rows[0].Cells) - 1
-	if lastCol <= 0 {
-		return false
-	}
-	for _, row := range tbl.Rows {
-		if len(row.Cells) <= lastCol {
-			return false
-		}
-		if row.Cells[lastCol].BBox.IsEmpty() {
-			return false
-		}
-	}
-	return true
-}
-
 func splitTableOnSparseRowRuns(tbl Table, pageRect geometry.Rect) []Table {
 	if len(tbl.Rows) < 10 {
 		return []Table{tbl}
@@ -388,7 +369,7 @@ func (tables *TableArray) normalizeColumns(pageRect geometry.Rect) {
 	}
 	for ti := range tables.Tables {
 		tbl := &tables.Tables[ti]
-		normalizeGrid(tbl, pageRect, shouldPreserveEmptyColumns(*tbl))
+		normalizeGrid(tbl, pageRect)
 	}
 }
 

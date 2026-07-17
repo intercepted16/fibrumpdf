@@ -106,9 +106,7 @@ func segmentRows(rows []Row, pageRect geometry.Rect) []Table {
 			for _, row := range table.Rows {
 				table.BBox = table.BBox.Union(row.BBox)
 			}
-			if !isFullPageTable(table, pageRect) {
-				tables = append(tables, splitTableOnSparseRowRuns(table, pageRect)...)
-			}
+			tables = append(tables, splitTableOnSparseRowRuns(table, pageRect)...)
 		}
 		start = i
 	}
@@ -142,8 +140,4 @@ func rowSplitGap(rows []Row, pageRect geometry.Rect) float32 {
 		geometry.Max32(pageRect.Height()*0.03, averageHeight*2.4),
 		pageRect.Height()*splitGapRatio,
 	)
-}
-
-func isFullPageTable(table Table, pageRect geometry.Rect) bool {
-	return pageRect.Height() > 0 && table.BBox.Height()/pageRect.Height() > 0.9 && len(table.Rows) > 10
 }

@@ -222,80 +222,87 @@ func detectBorderlessTables(raw *rawdata.PageData, pageRect geometry.Rect) *Tabl
 		cellBBoxes[k] = blBBoxOfChars(raw, chars)
 	}
 
-	multiColRows, totalContentRows, col0OnlyRows := 0, 0, 0
+	occupiedColumns := make([]int, len(rows))
+	tableRows := make([]bool, len(rows))
+	multiColRows := 0
 	for ri := range rows {
-		occupied, hasCol0 := 0, false
 		for c := 0; c < nCols; c++ {
 			if _, ok := cellChars[cellKey{row: ri, col: c}]; ok {
-				occupied++
-				if c == 0 {
-					hasCol0 = true
-				}
+				occupiedColumns[ri]++
 			}
 		}
-		if occupied == 0 {
+		if occupiedColumns[ri] >= 2 {
+			tableRows[ri] = true
+			multiColRows++
+		}
+	}
+	if multiColRows < 2 {
+		Logger.Debug("borderless: rejected — insufficient multi-column rows", "rows", multiColRows)
+		return nil
+	}
+	for left := 0; left < len(tableRows); {
+		if !tableRows[left] {
+			left++
 			continue
 		}
-		totalContentRows++
-		if occupied >= 2 {
-			multiColRows++
-		} else {
-			if hasCol0 {
-				col0OnlyRows++
+		right := left + 1
+		for right < len(tableRows) && !tableRows[right] && occupiedColumns[right] > 0 && right-left <= 3 {
+			right++
+		}
+		if right < len(tableRows) && tableRows[right] {
+			for row := left + 1; row < right; row++ {
+				tableRows[row] = true
 			}
 		}
+		left = right
 	}
 
-	if totalContentRows == 0 {
-		return nil
-	}
-	multiColFrac := float32(multiColRows) / float32(totalContentRows)
-	Logger.Debug("borderless: fill stats",
-		"multiColFrac", multiColFrac,
-		"multiColRows", multiColRows, "totalRows", totalContentRows)
-
-	const minMultiColFrac = 0.07
-	if multiColFrac < minMultiColFrac && multiColRows < 2 {
-		Logger.Debug("borderless: rejected — insufficient multi-column rows", "frac", multiColFrac)
-		return nil
-	}
-
-	col0Frac := float32(col0OnlyRows) / float32(totalContentRows)
-	if col0Frac > 0.80 && multiColFrac < 0.20 {
-		Logger.Debug("borderless: rejected — heavily col-0 prose", "col0Frac", col0Frac)
-		return nil
-	}
-
-	rowsOut := make([]Row, 0, len(rows))
-	for r := 0; r < len(rows); r++ {
-		rowCells := make([]Cell, nCols)
-		var rowBBox geometry.Rect
-		for c := 0; c < nCols; c++ {
-			k := cellKey{row: r, col: c}
-			if bbox, ok := cellBBoxes[k]; ok {
-				rowCells[c] = Cell{BBox: bbox}
-				if rowBBox.IsEmpty() {
-					rowBBox = bbox
-				} else {
-					rowBBox = rowBBox.Union(bbox)
+	var tables []Table
+	for start := 0; start < len(tableRows); {
+		for start < len(tableRows) && !tableRows[start] {
+			start++
+		}
+		end := start
+		for end < len(tableRows) && tableRows[end] {
+			end++
+		}
+		if end-start >= 2 {
+			rowsOut := make([]Row, 0, end-start)
+			proseRows := 0
+			for r := start; r < end; r++ {
+				rowCells := make([]Cell, nCols)
+				var rowBBox geometry.Rect
+				longCell := false
+				for c := range rowCells {
+					key := cellKey{row: r, col: c}
+					if len(cellChars[key]) > 40 {
+						longCell = true
+					}
+					if bbox, ok := cellBBoxes[key]; ok {
+						rowCells[c] = Cell{BBox: bbox}
+						rowBBox = rowBBox.Union(bbox)
+					}
 				}
+				if longCell {
+					proseRows++
+				}
+				rowsOut = append(rowsOut, Row{BBox: rowBBox, Cells: rowCells})
+			}
+			if proseRows*2 > len(rowsOut) {
+				Logger.Debug("borderless: rejected wrapped prose columns")
+			} else if assembled := assembleRows(rowsOut, pageRect); assembled != nil {
+				tables = append(tables, assembled.Tables...)
 			}
 		}
-		rowsOut = append(rowsOut, Row{BBox: rowBBox, Cells: rowCells})
+		start = end + 1
 	}
-	if len(rowsOut) < 2 {
-		return nil
-	}
-
-	assembled := assembleRows(rowsOut, pageRect)
-	if assembled == nil || len(assembled.Tables) == 0 {
+	if len(tables) == 0 {
 		Logger.Debug("borderless: no assembled tables")
 		return nil
 	}
-	assembled.normalizeColumns(pageRect)
 
 	var finalTables TableArray
-	for _, t := range assembled.Tables {
+	for _, t := range tables {
 		tCols := 0
 		if len(t.Rows) > 0 {
 			tCols = len(t.Rows[0].Cells)

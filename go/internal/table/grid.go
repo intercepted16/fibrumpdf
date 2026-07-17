@@ -7,16 +7,14 @@ import (
 	"github.com/fibrumpdf/go/internal/geometry"
 )
 
-func normalizeGrid(table *Table, pageRect geometry.Rect, preserveEmptyColumns bool) {
+func normalizeGrid(table *Table, pageRect geometry.Rect) {
 	if table == nil || len(table.Rows) == 0 {
 		return
 	}
 	pruneEmptyRows(table)
 	alignColumns(table, pageRect)
 	pruneEmptyRows(table)
-	if !preserveEmptyColumns {
-		dropEmptyColumns(table)
-	}
+	dropEmptyColumns(table)
 	padRows(table)
 }
 

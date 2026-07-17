@@ -241,7 +241,7 @@ func isTableOversized(tableRect, pageRect geometry.Rect) bool {
 	if tableRect.IsEmpty() || pageRect.IsEmpty() {
 		return true
 	}
-	return tableRect.Height()/pageRect.Height() > 0.97 || tableRect.Width()/pageRect.Width() > 0.99
+	return tableRect.Width()/pageRect.Width() > 0.99
 }
 
 func deduplicateTables(tables []Table) []Table {
@@ -442,16 +442,12 @@ func splitCharsIntoLines(chars []rawdata.Char) [][]rawdata.Char {
 }
 
 func convertTableRows(tbl Table) ([]models.TableRow, int) {
-	preserveEmptyCols := tbl.RuledTable || shouldPreserveEmptyColumns(tbl)
 	rows := make([]models.TableRow, 0, len(tbl.Rows))
 	visibleRows := 0
 	for _, r := range tbl.Rows {
 		cells := make([]models.TableCell, 0, len(r.Cells))
 		hasVisible := false
 		for _, c := range r.Cells {
-			if c.BBox.IsEmpty() && !preserveEmptyCols {
-				continue
-			}
 			text := strings.TrimSpace(c.Text)
 			var spans []models.Span
 			if text != "" {
@@ -476,7 +472,9 @@ func cleanupMaterializedTable(table *Table) {
 		return
 	}
 	padRows(table)
-	mergeJoinedColumns(table)
+	if table.RuledTable {
+		mergeJoinedColumns(table)
+	}
 	dropTextEmptyColumns(table)
 }
 
