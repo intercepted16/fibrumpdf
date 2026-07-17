@@ -18,8 +18,6 @@
 #include <sys/wait.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <sys/mman.h>
-#include <pthread.h>
 #endif
 #include <math.h>
 
@@ -37,22 +35,14 @@ typedef struct
     fz_buffer* edges_buf;
 } combined_device;
 
-typedef struct {
+typedef struct
+{
     fz_font* font;
     unsigned char flags;
 } font_cache_entry;
 
-
 #define FONT_CACHE_SIZE 256
-typedef struct {
-#ifndef _WIN32
-    pthread_mutex_t lock;
-#endif
-    font_cache_entry entries[FONT_CACHE_SIZE];
-    int len;
-} shared_font_cache;
-
-static shared_font_cache* global_font_cache = NULL;
+static font_cache_entry font_cache[FONT_CACHE_SIZE];
 
 static int contains_token_ci(const char* haystack, const char* needle) {
     if (!haystack || !needle || !needle[0])
@@ -108,82 +98,22 @@ static unsigned char compute_font_flags(fz_context* ctx, fz_font* f) {
     return flags;
 }
 
-/* Initialize shared font cache (call in parent before fork) */
-static int init_shared_font_cache(void) {
-#ifdef _WIN32
-    global_font_cache = calloc(1, sizeof(shared_font_cache));
-    return global_font_cache ? 0 : -1;
-#else
-    global_font_cache = mmap(NULL, sizeof(shared_font_cache), 
-                             PROT_READ | PROT_WRITE, 
-                             MAP_SHARED | MAP_ANONYMOUS, 
-                             -1, 0);
-    if (global_font_cache == MAP_FAILED)
-        return -1;
-
-    pthread_mutexattr_t attr;
-    pthread_mutexattr_init(&attr);
-    pthread_mutexattr_setpshared(&attr, PTHREAD_PROCESS_SHARED);
-    int ret = pthread_mutex_init(&global_font_cache->lock, &attr);
-    pthread_mutexattr_destroy(&attr);
-    
-    if (ret != 0) {
-        munmap(global_font_cache, sizeof(shared_font_cache));
-        global_font_cache = NULL;
-        return -1;
-    }
-
-    global_font_cache->len = 0;
-    return 0;
-#endif
+static void clear_font_cache(void)
+{
+    memset(font_cache, 0, sizeof(font_cache));
 }
 
-/* Cleanup shared font cache (call after all workers finish) */
-static void cleanup_shared_font_cache(void) {
-    if (!global_font_cache)
-        return;
-#ifdef _WIN32
-    free(global_font_cache);
-#else
-    pthread_mutex_destroy(&global_font_cache->lock);
-    munmap(global_font_cache, sizeof(shared_font_cache));
-#endif
-    global_font_cache = NULL;
-}
-
-/* Lookup or add font to shared cache. Returns flags for the font. */
-static unsigned char get_font_flags(fz_context* ctx, fz_font* f) {
+static unsigned char get_font_flags(fz_context* ctx, fz_font* f)
+{
     if (!f)
         return 0;
-    if (!global_font_cache)
-        return compute_font_flags(ctx, f);
-
-#ifndef _WIN32
-    pthread_mutex_lock(&global_font_cache->lock);
-#endif
-
-    for (int i = 0; i < global_font_cache->len; i++) {
-        if (global_font_cache->entries[i].font == f) {
-            unsigned char flags = global_font_cache->entries[i].flags;
-#ifndef _WIN32
-            pthread_mutex_unlock(&global_font_cache->lock);
-#endif
-            return flags;
-        }
+    size_t slot = ((uintptr_t)f >> 4) & (FONT_CACHE_SIZE - 1);
+    font_cache_entry* entry = &font_cache[slot];
+    if (entry->font != f) {
+        entry->font = f;
+        entry->flags = compute_font_flags(ctx, f);
     }
-
-    unsigned char flags = compute_font_flags(ctx, f);
-
-    if (global_font_cache->len < FONT_CACHE_SIZE) {
-        global_font_cache->entries[global_font_cache->len].font = f;
-        global_font_cache->entries[global_font_cache->len].flags = flags;
-        global_font_cache->len++;
-    }
-
-#ifndef _WIN32
-    pthread_mutex_unlock(&global_font_cache->lock);
-#endif
-    return flags;
+    return entry->flags;
 }
 
 static void mupdf_warning_callback(void* user, const char* message) {
@@ -746,7 +676,6 @@ char* extract_all_pages(const char* pdf_path)
     fz_context* ctx = fz_new_context(NULL, NULL, FZ_STORE_SIZE);
     if (!ctx) {
         fprintf(stderr, "fibrum_pdf: failed to create MuPDF context\n");
-        cleanup_shared_font_cache();
         free(temp_dir);
         return NULL;
     }
@@ -773,7 +702,7 @@ char* extract_all_pages(const char* pdf_path)
         if (doc)
             fz_drop_document(ctx, doc);
         fz_drop_context(ctx);
-        cleanup_shared_font_cache();        free(temp_dir);
+        free(temp_dir);
         return NULL;
     }
 
@@ -796,18 +725,16 @@ char* extract_all_pages(const char* pdf_path)
     if (page_count < 64 && num_workers > 8)
         num_workers = 8;
 
-    int threshold = 2;
-    if (page_count < threshold) {
-        num_workers = 1;  /* force sequential */
-    }
+    if (page_count < 2)
+        num_workers = 1;
 
+    clear_font_cache();
     if (num_workers == 1) {
         for (int p = 0; p < page_count; p++) {
             char filename[512];
             snprintf(filename, sizeof(filename), "%s/page_%03d.raw", temp_dir, p + 1);
-            if (extract_page_to_file(ctx, doc, p, filename) != 0) {
+            if (extract_page_to_file(ctx, doc, p, filename) != 0)
                 fprintf(stderr, "Warning: failed to extract page %d\n", p + 1);
-            }
         }
 
         if (doc)
@@ -822,31 +749,20 @@ char* extract_all_pages(const char* pdf_path)
     fz_drop_context(ctx);
     return temp_dir;
 #else
-    if (init_shared_font_cache() != 0) {
-        if (doc)
-            fz_drop_document(ctx, doc);
-        fz_drop_context(ctx);
-        free(temp_dir);
-        return NULL;
-    }
+    fz_drop_document(ctx, doc);
+    fz_drop_context(ctx);
 
     pid_t* pids = calloc(num_workers, sizeof(pid_t));
     if (!pids) {
-        if (doc)
-            fz_drop_document(ctx, doc);
-        fz_drop_context(ctx);
-        cleanup_shared_font_cache();        free(temp_dir);
+        free(temp_dir);
         return NULL;
     }
     int created = 0;
 
     for (int i = 0; i < num_workers; i++) {
-        int start = i;        if (start >= page_count)
-            break;
-
+        int start = i;
         pid_t pid = fork();
-        if (pid < 0)
-        {
+        if (pid < 0) {
             perror("fork");
             continue;
         }
@@ -870,38 +786,27 @@ char* extract_all_pages(const char* pdf_path)
                 _exit(1);
             }
 
-            int pages_processed = 0;
-
-
             for (int p = start; p < page_count; p += num_workers) {
                 char filename[512];
                 snprintf(filename, sizeof(filename), "%s/page_%03d.raw", temp_dir, p + 1);
                 if (extract_page_to_file(child_ctx, child_doc, p, filename) != 0)
                     fprintf(stderr, "Warning: failed to extract page %d\n", p + 1);
-                pages_processed++;
             }
 
             if (child_doc)
                 fz_drop_document(child_ctx, child_doc);
             fz_drop_context(child_ctx);
-            _exit(0);        }
+            _exit(0);
+        }
         pids[created++] = pid;
     }
-
-    /* Using round-robin forked workers; no pipe writes necessary. Parent simply waits for children. */
 
     for (int i = 0; i < created; i++) {
         int wstatus;
         waitpid(pids[i], &wstatus, 0);
     }
 
-   if (doc)
-        fz_drop_document(ctx, doc);
-    fz_drop_context(ctx);
-
-    cleanup_shared_font_cache();
     free(pids);
-    
     return temp_dir;
 #endif
 }
