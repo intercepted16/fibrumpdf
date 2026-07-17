@@ -15,63 +15,40 @@ var Logger = logger.GetLogger("table")
 func cordToInt(x float64) int { return int(x*cordScale + 0.5) }
 
 func hasEdge(edges []Edge, x0, y0, x1, y1, eps float64) bool {
-
-	isHorizontal := math.Abs(y0-y1) < eps
-
-	if isHorizontal {
-
-		targetY := (y0 + y1) / 2
-		spanStart, spanEnd := math.Min(x0, x1), math.Max(x0, x1)
-
-		var coveringEdges []struct{ x0, x1 float64 }
-		for _, e := range edges {
-			if e.Orientation == rawdata.EdgeHorizontal && math.Abs(e.Y0-targetY) < eps {
-				coveringEdges = append(coveringEdges, struct{ x0, x1 float64 }{e.X0, e.X1})
-			}
-		}
-
-		return spanIsCovered(coveringEdges, spanStart, spanEnd, eps)
-	} else {
-
-		targetX := (x0 + x1) / 2
-		spanStart, spanEnd := math.Min(y0, y1), math.Max(y0, y1)
-
-		var coveringEdges []struct{ x0, x1 float64 }
-		for _, e := range edges {
-			if e.Orientation == rawdata.EdgeVertical && math.Abs(e.X0-targetX) < eps {
-				coveringEdges = append(coveringEdges, struct{ x0, x1 float64 }{e.Y0, e.Y1})
-			}
-		}
-
-		return spanIsCovered(coveringEdges, spanStart, spanEnd, eps)
-	}
-}
-
-func spanIsCovered(segments []struct{ x0, x1 float64 }, spanStart, spanEnd, eps float64) bool {
-	if len(segments) == 0 {
-		return false
+	horizontal := math.Abs(y0-y1) < eps
+	target := (x0 + x1) / 2
+	spanStart, spanEnd := math.Min(y0, y1), math.Max(y0, y1)
+	orientation := rawdata.EdgeVertical
+	if horizontal {
+		target = (y0 + y1) / 2
+		spanStart, spanEnd = math.Min(x0, x1), math.Max(x0, x1)
+		orientation = rawdata.EdgeHorizontal
 	}
 
-	sort.Slice(segments, func(i, j int) bool { return segments[i].x0 < segments[j].x0 })
-
-	mergedStart := segments[0].x0
-	mergedEnd := segments[0].x1
-	for i := 1; i < len(segments); i++ {
-		if segments[i].x0 <= mergedEnd+eps {
-			if segments[i].x1 > mergedEnd {
-				mergedEnd = segments[i].x1
+	coveredEnd := spanStart
+	for {
+		nextEnd := coveredEnd
+		for _, edge := range edges {
+			if edge.Orientation != orientation {
+				continue
 			}
-		} else {
-
-			if mergedStart-eps <= spanStart && mergedEnd+eps >= spanEnd {
-				return true
+			position, start, end := edge.X0, edge.Y0, edge.Y1
+			if horizontal {
+				position, start, end = edge.Y0, edge.X0, edge.X1
 			}
-			mergedStart = segments[i].x0
-			mergedEnd = segments[i].x1
+			start, end = math.Min(start, end), math.Max(start, end)
+			if math.Abs(position-target) < eps && start <= coveredEnd+eps && end > nextEnd {
+				nextEnd = end
+			}
 		}
+		if nextEnd+eps >= spanEnd {
+			return true
+		}
+		if nextEnd == coveredEnd {
+			return false
+		}
+		coveredEnd = nextEnd
 	}
-
-	return mergedStart-eps <= spanStart && mergedEnd+eps >= spanEnd
 }
 
 func findCells(pageRect geometry.Rect, hEdges, vEdges []Edge, avgEdgeSpacing float64) []geometry.Rect {
