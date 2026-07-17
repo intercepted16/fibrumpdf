@@ -16,9 +16,7 @@ type layoutBlock struct {
 func (b *layoutBlock) GetBBox() models.BBox   { return b.bbox }
 func (b *layoutBlock) SetColumnIndex(idx int) { b.colIdx = idx }
 
-type layoutStage struct{}
-
-func (s layoutStage) Run(ctx parseOutput, blocks []classifiedBlock) []layoutBlock {
+func layoutBlocks(ctx parseOutput, blocks []classifiedBlock) []layoutBlock {
 	layoutBlocks := make([]layoutBlock, len(blocks))
 	for i := range blocks {
 		layoutBlocks[i] = layoutBlock{classifiedBlock: blocks[i]}
@@ -28,11 +26,11 @@ func (s layoutStage) Run(ctx parseOutput, blocks []classifiedBlock) []layoutBloc
 		colBlocks[i] = &layoutBlocks[i]
 	}
 	column.DetectAndAssignColumns(colBlocks, ctx.bodyFontSize, nil)
-	s.sortLayoutBlocks(layoutBlocks)
+	sortLayoutBlocks(layoutBlocks)
 	return layoutBlocks
 }
 
-func (s layoutStage) sortLayoutBlocks(blocks []layoutBlock) {
+func sortLayoutBlocks(blocks []layoutBlock) {
 	sort.SliceStable(blocks, func(i, j int) bool {
 		return ReadingOrderLess(blocks[i].bbox, blocks[j].bbox, blocks[i].colIdx, blocks[j].colIdx)
 	})

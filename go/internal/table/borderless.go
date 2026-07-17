@@ -56,8 +56,9 @@ func detectBorderlessTables(raw *rawdata.PageData, pageRect geometry.Rect) *Tabl
 	for ri := range rows {
 		idxs := make([]int, len(rows[ri].chars))
 		copy(idxs, rows[ri].chars)
-		sorter := charXSorter{indices: idxs, chars: raw.Chars}
-		sort.Sort(sorter)
+		sort.Slice(idxs, func(i, j int) bool {
+			return raw.Chars[idxs[i]].BBox.X0 < raw.Chars[idxs[j]].BBox.X0
+		})
 		rowSorted[ri] = idxs
 	}
 
@@ -347,17 +348,6 @@ func detectBorderlessTables(raw *rawdata.PageData, pageRect geometry.Rect) *Tabl
 	return &finalTables
 }
 
-type charXSorter struct {
-	indices []int
-	chars   []rawdata.Char
-}
-
-func (s charXSorter) Len() int      { return len(s.indices) }
-func (s charXSorter) Swap(i, j int) { s.indices[i], s.indices[j] = s.indices[j], s.indices[i] }
-func (s charXSorter) Less(i, j int) bool {
-	return s.chars[s.indices[i]].BBox.X0 < s.chars[s.indices[j]].BBox.X0
-}
-
 func blBBoxOfChars(raw *rawdata.PageData, charIndices []int) geometry.Rect {
 	var bbox geometry.Rect
 	for _, ci := range charIndices {
@@ -437,25 +427,5 @@ func columnForRange(x0, x1 float32, colPositions []float32, pageRect geometry.Re
 			bestOverlap, bestCenterDist, bestCol = overlap, centerDist, i
 		}
 	}
-	if bestCol >= 0 {
-		return bestCol
-	}
-	// Fallback: find column for range center
-	for i, pos := range colPositions {
-		var left, right float32
-		if i > 0 {
-			left = (colPositions[i-1] + pos) * 0.5
-		} else {
-			left = pageRect.X0
-		}
-		if i < len(colPositions)-1 {
-			right = (pos + colPositions[i+1]) * 0.5
-		} else {
-			right = pageRect.X1
-		}
-		if rangeCenter >= left && rangeCenter < right {
-			return i
-		}
-	}
-	return -1
+	return bestCol
 }

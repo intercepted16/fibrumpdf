@@ -324,16 +324,7 @@ func shrinkCellToContent(cell geometry.Rect, chars []rawdata.Char) geometry.Rect
 	}
 }
 
-type charRectSorter struct {
-	indices []int
-	chars   []rawdata.Char
-}
-
-func (s charRectSorter) Len() int      { return len(s.indices) }
-func (s charRectSorter) Swap(i, j int) { s.indices[i], s.indices[j] = s.indices[j], s.indices[i] }
-func (s charRectSorter) Less(i, j int) bool {
-	a := &s.chars[s.indices[i]]
-	b := &s.chars[s.indices[j]]
+func charReadingOrderLess(a, b rawdata.Char) bool {
 	ay, by := (a.BBox.Y0+a.BBox.Y1)*0.5, (b.BBox.Y0+b.BBox.Y1)*0.5
 	lineTol := geometry.Max32(geometry.Max32(a.Size, b.Size)*0.45, 0.8)
 	dyDiff := ay - by
@@ -350,7 +341,7 @@ func (s charRectSorter) Less(i, j int) bool {
 	if dx > 0.3 {
 		return false
 	}
-	return s.indices[i] < s.indices[j]
+	return false
 }
 
 func extractTextInRect(raw *rawdata.PageData, rect geometry.Rect) string {
@@ -358,13 +349,11 @@ func extractTextInRect(raw *rawdata.PageData, rect geometry.Rect) string {
 	if len(indices) == 0 {
 		return ""
 	}
-	sorter := charRectSorter{indices: indices, chars: raw.Chars}
-	sort.Stable(sorter)
-
 	chars := make([]rawdata.Char, len(indices))
 	for i, idx := range indices {
 		chars[i] = raw.Chars[idx]
 	}
+	sort.SliceStable(chars, func(i, j int) bool { return charReadingOrderLess(chars[i], chars[j]) })
 	assembler := textutil.NewTextAssembler(textutil.AssembleOptions{
 		InsertSpaces:       true,
 		Normalize:          true,
@@ -398,24 +387,16 @@ func extractTextInRectFromChars(chars []rawdata.Char, rect geometry.Rect, allowO
 	if len(selected) == 0 {
 		return ""
 	}
-	sorter := charRectSorter{indices: make([]int, len(selected)), chars: selected}
-	for i := range sorter.indices {
-		sorter.indices[i] = i
-	}
-	sort.Stable(sorter)
-	ordered := make([]rawdata.Char, len(sorter.indices))
-	for i, idx := range sorter.indices {
-		ordered[i] = selected[idx]
-	}
+	sort.SliceStable(selected, func(i, j int) bool { return charReadingOrderLess(selected[i], selected[j]) })
 
-	lines := splitCharsIntoLines(ordered)
+	lines := splitCharsIntoLines(selected)
 	assembler := textutil.NewTextAssembler(textutil.AssembleOptions{
 		InsertSpaces:       true,
 		Normalize:          true,
 		MergeNumericSpaces: true,
 	})
 	if len(lines) <= 1 {
-		return assembler.AssembleOrderedChars(ordered)
+		return assembler.AssembleOrderedChars(selected)
 	}
 	parts := make([]string, 0, len(lines))
 	for _, line := range lines {

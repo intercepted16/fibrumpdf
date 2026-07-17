@@ -30,21 +30,19 @@ type parsedListLine struct {
 	indent int
 }
 
-type splitStage struct{}
-
-func (s splitStage) Run(ctx parseOutput) []splitBlock {
+func splitBlocks(ctx parseOutput) []splitBlock {
 	blocks := make([]splitBlock, 0, len(ctx.raw.Blocks))
 	for i := range ctx.raw.Blocks {
 		rawBlock := &ctx.raw.Blocks[i]
 		if rawBlock.Type != raw.BlockText {
 			continue
 		}
-		blocks = append(blocks, s.splitRawBlock(ctx, rawBlock.LineStart, rawBlock.LineCount)...)
+		blocks = append(blocks, splitRawBlock(ctx, rawBlock.LineStart, rawBlock.LineCount)...)
 	}
 	return blocks
 }
 
-func (s splitStage) splitRawBlock(ctx parseOutput, lineStart, lineCount int) []splitBlock {
+func splitRawBlock(ctx parseOutput, lineStart, lineCount int) []splitBlock {
 	var result []splitBlock
 	lineIdx := 0
 	for lineIdx < lineCount {
@@ -69,7 +67,7 @@ func (s splitStage) splitRawBlock(ctx parseOutput, lineStart, lineCount int) []s
 				prevLine := ctx.raw.Lines[lineAbsIdx-1]
 				currLine := ctx.raw.Lines[lineAbsIdx]
 				gap := currLine.BBox.Y0 - prevLine.BBox.Y1
-				if s.shouldStartNewBlock(lastLineFontSize, avgLineFontSize, gap) {
+				if shouldStartNewBlock(lastLineFontSize, avgLineFontSize, gap) {
 					break
 				}
 				sep := "\n"
@@ -77,7 +75,7 @@ func (s splitStage) splitRawBlock(ctx parseOutput, lineStart, lineCount int) []s
 					sep = " "
 				}
 				textStr.WriteString(sep)
-				spans = s.appendSeparator(spans, sep)
+				spans = appendSeparator(spans, sep)
 			}
 			lastLineFontSize = avgLineFontSize
 			lb := lineInfo.bbox
@@ -108,7 +106,7 @@ func (s splitStage) splitRawBlock(ctx parseOutput, lineStart, lineCount int) []s
 		if len(spans) == 0 {
 			continue
 		}
-		s.normalizeListIndents(listLines, fontSizeSum/float32(totalChars))
+		normalizeListIndents(listLines, fontSizeSum/float32(totalChars))
 		result = append(result, splitBlock{
 			text:        text,
 			bbox:        subBBox,
@@ -126,7 +124,7 @@ func (s splitStage) splitRawBlock(ctx parseOutput, lineStart, lineCount int) []s
 	return result
 }
 
-func (s splitStage) normalizeListIndents(lines []parsedListLine, fontSize float32) {
+func normalizeListIndents(lines []parsedListLine, fontSize float32) {
 	if len(lines) == 0 {
 		return
 	}
@@ -140,14 +138,14 @@ func (s splitStage) normalizeListIndents(lines []parsedListLine, fontSize float3
 	}
 }
 
-func (s splitStage) shouldStartNewBlock(prevSize, currSize, gap float32) bool {
+func shouldStartNewBlock(prevSize, currSize, gap float32) bool {
 	if prevSize > 0 && math.Abs(float64(currSize-prevSize)) > 0.5 {
 		return true
 	}
 	return gap > currSize*1.8
 }
 
-func (s splitStage) appendSeparator(spans []models.Span, sep string) []models.Span {
+func appendSeparator(spans []models.Span, sep string) []models.Span {
 	if sep == "" {
 		return spans
 	}

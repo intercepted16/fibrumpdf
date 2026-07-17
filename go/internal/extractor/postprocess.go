@@ -10,8 +10,6 @@ import (
 	"github.com/fibrumpdf/go/internal/textutil"
 )
 
-type postProcessStage struct{}
-
 type postBlock struct {
 	layoutBlock
 	listItems []models.ListItem
@@ -23,12 +21,12 @@ type orderedBlock struct {
 	block  models.Block
 }
 
-func (s postProcessStage) Run(ctx parseOutput, blocks []layoutBlock, tables []models.Block) []models.Block {
+func postProcess(ctx parseOutput, blocks []layoutBlock, tables []models.Block) []models.Block {
 	ordered := make([]orderedBlock, 0, len(blocks)+len(tables))
 	for _, b := range blocks {
 		pb := postBlock{layoutBlock: b}
 		if pb.typ == models.BlockList {
-			items, listText := s.parseListItems(pb.listLines)
+			items, listText := parseListItems(pb.listLines)
 			if len(items) == 0 {
 				continue
 			}
@@ -37,10 +35,10 @@ func (s postProcessStage) Run(ctx parseOutput, blocks []layoutBlock, tables []mo
 			pb.textChars = utf8.RuneCountInString(listText)
 			pb.spans = []models.Span{{Text: listText}}
 		}
-		if s.isBoundaryNoise(ctx, pb) {
+		if isBoundaryNoise(ctx, pb) {
 			continue
 		}
-		if !s.hasVisibleContent(pb.text) {
+		if !hasVisibleContent(pb.text) {
 			continue
 		}
 		ordered = append(ordered, orderedBlock{bbox: pb.bbox, colIdx: pb.colIdx, block: pb.toBlock()})
@@ -54,13 +52,13 @@ func (s postProcessStage) Run(ctx parseOutput, blocks []layoutBlock, tables []mo
 	out := make([]models.Block, 0, len(ordered))
 	for _, b := range ordered {
 		blk := b.block
-		s.cleanBlockSpans(&blk)
+		cleanBlockSpans(&blk)
 		out = append(out, blk)
 	}
 	return out
 }
 
-func (s postProcessStage) parseListItems(lines []parsedListLine) ([]models.ListItem, string) {
+func parseListItems(lines []parsedListLine) ([]models.ListItem, string) {
 	items := make([]models.ListItem, 0, len(lines))
 	outLines := make([]string, 0, len(lines))
 	for _, line := range lines {
@@ -68,7 +66,7 @@ func (s postProcessStage) parseListItems(lines []parsedListLine) ([]models.ListI
 		if text == "" {
 			continue
 		}
-		kind, prefix, body := s.parseListLine(text)
+		kind, prefix, body := parseListLine(text)
 		if kind == listNone || body == "" {
 			continue
 		}
@@ -80,7 +78,7 @@ func (s postProcessStage) parseListItems(lines []parsedListLine) ([]models.ListI
 		}
 		itemText := strings.TrimSpace(marker + " " + body)
 		items = append(items, models.ListItem{
-			Spans: s.listBodySpans(line.spans, text, body), ListType: itemType,
+			Spans: listBodySpans(line.spans, text, body), ListType: itemType,
 			Indent: line.indent, Prefix: prefix,
 		})
 		outLines = append(outLines, itemText)
@@ -88,7 +86,7 @@ func (s postProcessStage) parseListItems(lines []parsedListLine) ([]models.ListI
 	return items, strings.Join(outLines, "\n")
 }
 
-func (s postProcessStage) listBodySpans(spans []models.Span, line, body string) []models.Span {
+func listBodySpans(spans []models.Span, line, body string) []models.Span {
 	bodyAt := strings.Index(line, body)
 	if bodyAt < 0 {
 		return []models.Span{{Text: body}}
@@ -120,7 +118,7 @@ const (
 	listNumbered
 )
 
-func (s postProcessStage) parseListLine(line string) (listKind, string, string) {
+func parseListLine(line string) (listKind, string, string) {
 	line = strings.TrimSpace(line)
 	if line == "" {
 		return listNone, "", ""
@@ -135,11 +133,11 @@ func (s postProcessStage) parseListLine(line string) (listKind, string, string) 
 	return listNone, "", ""
 }
 
-func (s postProcessStage) isBoundaryNoise(ctx parseOutput, b postBlock) bool {
+func isBoundaryNoise(ctx parseOutput, b postBlock) bool {
 	if b.textChars == 0 {
 		return true
 	}
-	if !s.isLonePageNumber(b.text) {
+	if !isLonePageNumber(b.text) {
 		return false
 	}
 	pb := ctx.raw.PageBounds
@@ -148,7 +146,7 @@ func (s postProcessStage) isBoundaryNoise(ctx parseOutput, b postBlock) bool {
 	return b.bbox.Y0() <= pb.Y0+margin || b.bbox.Y1() >= pb.Y1-margin
 }
 
-func (s postProcessStage) isLonePageNumber(text string) bool {
+func isLonePageNumber(text string) bool {
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" {
 		return false
@@ -161,7 +159,7 @@ func (s postProcessStage) isLonePageNumber(text string) bool {
 	return len(trimmed) <= 4
 }
 
-func (s postProcessStage) hasVisibleContent(text string) bool {
+func hasVisibleContent(text string) bool {
 	for _, r := range text {
 		if unicode.IsSpace(r) {
 			continue
@@ -186,24 +184,24 @@ func (b postBlock) toBlock() models.Block {
 	}
 }
 
-func (s postProcessStage) cleanBlockSpans(block *models.Block) {
+func cleanBlockSpans(block *models.Block) {
 	switch block.Type {
 	case models.BlockTable:
 		for i := range block.Rows {
 			for j := range block.Rows[i].Cells {
-				block.Rows[i].Cells[j].Spans = s.cleanSpans(block.Rows[i].Cells[j].Spans)
+				block.Rows[i].Cells[j].Spans = cleanSpans(block.Rows[i].Cells[j].Spans)
 			}
 		}
 	case models.BlockList:
 		for i := range block.Items {
-			block.Items[i].Spans = s.cleanSpans(block.Items[i].Spans)
+			block.Items[i].Spans = cleanSpans(block.Items[i].Spans)
 		}
 	default:
-		block.Spans = s.cleanSpans(block.Spans)
+		block.Spans = cleanSpans(block.Spans)
 	}
 }
 
-func (s postProcessStage) cleanSpans(spans []models.Span) []models.Span {
+func cleanSpans(spans []models.Span) []models.Span {
 	if len(spans) == 0 {
 		return nil
 	}

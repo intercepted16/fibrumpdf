@@ -76,9 +76,7 @@ type parsedLine struct {
 	monoCount   int
 }
 
-type parserStage struct{}
-
-func (s parserStage) Run(raw *rawdata.PageData, cfg ExtractionConfig) parseOutput {
+func parsePage(raw *rawdata.PageData, cfg ExtractionConfig) parseOutput {
 	stats := &fontStats{}
 	for _, ch := range raw.Chars {
 		stats.add(ch.Size)
@@ -86,7 +84,7 @@ func (s parserStage) Run(raw *rawdata.PageData, cfg ExtractionConfig) parseOutpu
 	bodySize, medianSize := stats.mode(cfg), stats.median(cfg)
 	lines := make([]parsedLine, len(raw.Lines))
 	for i := range raw.Lines {
-		lines[i] = s.parseLine(raw, &raw.Lines[i], cfg)
+		lines[i] = parseLine(raw, &raw.Lines[i], cfg)
 	}
 	Logger.Debug("font stats", "bodySize", bodySize, "medianSize", medianSize)
 	return parseOutput{
@@ -98,7 +96,7 @@ func (s parserStage) Run(raw *rawdata.PageData, cfg ExtractionConfig) parseOutpu
 	}
 }
 
-func (s parserStage) parseLine(raw *rawdata.PageData, line *rawdata.Line, cfg ExtractionConfig) parsedLine {
+func parseLine(raw *rawdata.PageData, line *rawdata.Line, cfg ExtractionConfig) parsedLine {
 	indices := raw.SortedLineCharIndices(line, nil)
 	if len(indices) == 0 {
 		return parsedLine{bbox: models.BBox{line.BBox.X0, line.BBox.Y0, line.BBox.X1, line.BBox.Y1}, avgSize: cfg.DefaultFontSize}
@@ -131,7 +129,7 @@ func (s parserStage) parseLine(raw *rawdata.PageData, line *rawdata.Line, cfg Ex
 		if len(spans) == 0 || spans[len(spans)-1].Style != style || spans[len(spans)-1].URI != uri {
 			spans = append(spans, models.Span{Style: style, URI: uri})
 		}
-		if prev != nil && s.shouldInsertSyntheticSpace(*prev, ch) && !strings.HasSuffix(spans[len(spans)-1].Text, " ") {
+		if prev != nil && shouldInsertSyntheticSpace(*prev, ch) && !strings.HasSuffix(spans[len(spans)-1].Text, " ") {
 			spans[len(spans)-1].Text += " "
 		}
 		spans[len(spans)-1].Text += string(ch.Codepoint)
@@ -157,7 +155,7 @@ func (s parserStage) parseLine(raw *rawdata.PageData, line *rawdata.Line, cfg Ex
 	}
 }
 
-func (s parserStage) shouldInsertSyntheticSpace(prev, curr rawdata.Char) bool {
+func shouldInsertSyntheticSpace(prev, curr rawdata.Char) bool {
 	if unicode.IsSpace(prev.Codepoint) || unicode.IsSpace(curr.Codepoint) {
 		return false
 	}
