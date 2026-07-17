@@ -22,3 +22,12 @@ func TestHasEdgeJoinsUnorderedReversedSegmentsWithoutAllocating(t *testing.T) {
 		t.Fatalf("hasEdge allocated %.0f times per call", allocations)
 	}
 }
+
+func TestCoordToIntRoundsNegativeCoordinates(t *testing.T) {
+	if got := coordToInt(-0.0006); got != -1 {
+		t.Fatalf("coordToInt(-0.0006) = %d, want -1", got)
+	}
+	if got := coordToInt(-0.0004); got != 0 {
+		t.Fatalf("coordToInt(-0.0004) = %d, want 0", got)
+	}
+}

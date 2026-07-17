@@ -14,7 +14,7 @@ const (
 	splitGapRatio   = 0.10
 	rowYTolRatio    = 0.015
 	colXTolRatio    = 0.003
-	cordScale       = 1000.0
+	coordScale      = 1000.0
 	minHEdges       = 2
 	minVEdges       = 2
 	maxEdgesForGrid = 320

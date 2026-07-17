@@ -12,7 +12,13 @@ import (
 
 var Logger = logger.GetLogger("table")
 
-func cordToInt(x float64) int { return int(x*cordScale + 0.5) }
+func coordToInt(value float64) int {
+	scaled := value * coordScale
+	if scaled < 0 {
+		return int(scaled - 0.5)
+	}
+	return int(scaled + 0.5)
+}
 
 func hasEdge(edges []Edge, x0, y0, x1, y1, eps float64) bool {
 	horizontal := math.Abs(y0-y1) < eps
@@ -407,20 +413,20 @@ func mergeEdges(edges []Edge, snapTol, joinTol float64) []Edge {
 		})
 	}
 	var result []Edge
-	snapInt, joinInt := cordToInt(snapTol), cordToInt(joinTol)
+	snapInt, joinInt := coordToInt(snapTol), coordToInt(joinTol)
 	for i := 0; i < len(edges); {
 		cur := edges[i]
-		posSum := cordToInt(cur.Y0)
+		posSum := coordToInt(cur.Y0)
 		if orientation == rawdata.EdgeVertical {
-			posSum = cordToInt(cur.X0)
+			posSum = coordToInt(cur.X0)
 		}
 		count := 1
 		i++
 		for i < len(edges) {
 			next := edges[i]
-			nextPos := cordToInt(next.Y0)
+			nextPos := coordToInt(next.Y0)
 			if orientation == rawdata.EdgeVertical {
-				nextPos = cordToInt(next.X0)
+				nextPos = coordToInt(next.X0)
 			}
 			if int(math.Abs(float64(nextPos-posSum/count))) <= snapInt {
 				posSum += nextPos
@@ -430,7 +436,7 @@ func mergeEdges(edges []Edge, snapTol, joinTol float64) []Edge {
 				break
 			}
 		}
-		snapped := float64(posSum/count) / cordScale
+		snapped := float64(posSum/count) / coordScale
 		joined := cur
 		if orientation == rawdata.EdgeHorizontal {
 			joined.Y0, joined.Y1 = snapped, snapped
@@ -442,7 +448,7 @@ func mergeEdges(edges []Edge, snapTol, joinTol float64) []Edge {
 			next := edges[j]
 			if orientation == rawdata.EdgeHorizontal {
 				next.Y0, next.Y1 = snapped, snapped
-				if cordToInt(next.X0)-cordToInt(joined.X1) <= joinInt {
+				if coordToInt(next.X0)-coordToInt(joined.X1) <= joinInt {
 					joined.X1 = math.Max(joined.X1, next.X1)
 				} else {
 					result = append(result, joined)
@@ -450,7 +456,7 @@ func mergeEdges(edges []Edge, snapTol, joinTol float64) []Edge {
 				}
 			} else {
 				next.X0, next.X1 = snapped, snapped
-				if cordToInt(next.Y0)-cordToInt(joined.Y1) <= joinInt {
+				if coordToInt(next.Y0)-coordToInt(joined.Y1) <= joinInt {
 					joined.Y1 = math.Max(joined.Y1, next.Y1)
 				} else {
 					result = append(result, joined)
@@ -479,10 +485,9 @@ func computeAvgCharWidth(chars []rawdata.Char) float32 {
 	return total / float32(count)
 }
 
-func computeAvgEdgeSpacing(hEdges, vEdges []Edge) float64 {
+func averageMergedEdgeSpacing(hEdges, vEdges []Edge) float64 {
 	var totalDist float64
 	var count int
-	sort.Slice(hEdges, func(i, j int) bool { return hEdges[i].Y0 < hEdges[j].Y0 })
 	for i := 1; i < len(hEdges); i++ {
 		dist := math.Abs(hEdges[i].Y0 - hEdges[i-1].Y0)
 		if dist > 1.0 {
@@ -490,7 +495,6 @@ func computeAvgEdgeSpacing(hEdges, vEdges []Edge) float64 {
 			count++
 		}
 	}
-	sort.Slice(vEdges, func(i, j int) bool { return vEdges[i].X0 < vEdges[j].X0 })
 	for i := 1; i < len(vEdges); i++ {
 		dist := math.Abs(vEdges[i].X0 - vEdges[i-1].X0)
 		if dist > 1.0 {
@@ -525,7 +529,7 @@ func detectTables(bridgeEdges []rawdata.Edge, pageRect geometry.Rect, pageNum in
 	if len(hEdges) < minHEdges || len(vEdges) < minVEdges {
 		return nil
 	}
-	avgEdgeSpacing := computeAvgEdgeSpacing(hEdges, vEdges)
+	avgEdgeSpacing := averageMergedEdgeSpacing(hEdges, vEdges)
 	Logger.Debug("avg edge spacing", "page", pageNum, "spacing", avgEdgeSpacing)
 	cells := findCells(pageRect, hEdges, vEdges, avgEdgeSpacing)
 	Logger.Debug("found cells", "page", pageNum, "count", len(cells))

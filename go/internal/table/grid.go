@@ -83,8 +83,8 @@ func alignColumns(table *Table, pageRect geometry.Rect) {
 	for _, row := range table.Rows {
 		for _, cell := range row.Cells {
 			if !cell.BBox.IsEmpty() {
-				coordinates[cordToInt(float64(cell.BBox.X0))] = struct{}{}
-				coordinates[cordToInt(float64(cell.BBox.X1))] = struct{}{}
+				coordinates[coordToInt(float64(cell.BBox.X0))] = struct{}{}
+				coordinates[coordToInt(float64(cell.BBox.X1))] = struct{}{}
 			}
 		}
 	}
@@ -94,7 +94,7 @@ func alignColumns(table *Table, pageRect geometry.Rect) {
 	}
 	sort.Ints(x)
 
-	tolerance := max(int(pageRect.Width()*colXTolRatio*cordScale), 2000)
+	tolerance := max(int(pageRect.Width()*colXTolRatio*coordScale), 2000)
 	columns := make([][2]float32, 0, len(x)/2)
 	for i := 0; i < len(x)-1; {
 		start := x[i]
@@ -105,7 +105,7 @@ func alignColumns(table *Table, pageRect geometry.Rect) {
 		if end >= len(x) {
 			break
 		}
-		columns = append(columns, [2]float32{float32(start) / cordScale, float32(x[end]) / cordScale})
+		columns = append(columns, [2]float32{float32(start) / coordScale, float32(x[end]) / coordScale})
 		i = end
 	}
 	if len(columns) == 0 {
