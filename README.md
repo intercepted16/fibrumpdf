@@ -1,6 +1,6 @@
 # FibrumPDF
 
-**Structured PDF extraction at 179 pages per second on CPU.**
+**Structured PDF extraction at 306 pages per second on CPU.**
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776ab)](https://pypi.org/project/fibrum-pdf/)
 [![CI](https://github.com/intercepted16/fibrumpdf/actions/workflows/ci.yml/badge.svg)](https://github.com/intercepted16/fibrumpdf/actions/workflows/ci.yml)
@@ -16,23 +16,23 @@ seconds per page is not acceptable.
 
 ![Benchmark dashboard](benchmark/results/dashboard.svg)
 
-## The trade-off, measured
+## Performance, measured
 
 The repository benchmark contains 512 documents from the
 `datalab-to/marker_benchmark` dataset. On the documented Ryzen 7 4800H test
-system, the current FibrumPDF build processes **179.2 pages/s**—about **43×**
-PyMuPDF4LLM and **291×** Docling in this benchmark.
+system, the current FibrumPDF build processes **306.1 pages/s**—about **74×**
+PyMuPDF4LLM and **497×** Docling in this benchmark.
 
 | Extractor | Pages/s | Text score | Table TEDS | Table precision | Table recall |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| **FibrumPDF** | **179.12** | 84.75 | 0.754 | 0.535 | 0.436 |
+| **FibrumPDF** | **306.10** | **86.98** | **0.783** | 0.551 | **0.585** |
 | PyMuPDF4LLM | 4.15 | 86.54 | 0.778 | 0.647 | 0.554 |
 | Docling | 0.62 | 91.13 | 0.821 | 0.796 | 0.738 |
 
-That speed is a deliberate quality trade-off. ML-based extractors remain better
-for difficult tables and irregular layouts. FibrumPDF is compelling when a
-digital document has a conventional layout and throughput, local execution, and
-inspectable heuristics matter more than maximum recall.
+FibrumPDF slightly leads PyMuPDF4LLM on aggregate text score, table TEDS, and
+table recall here, while PyMuPDF4LLM retains higher table precision. ML-based
+extractors such as Docling remain better on difficult tables and irregular
+layouts, at a substantially higher runtime cost.
 
 [Open the interactive report](benchmark/results/dashboard.html) or see
 [how the benchmark works](#reproduce-the-benchmark).
@@ -138,6 +138,11 @@ flowchart LR
 MuPDF handles PDF interpretation. Go performs layout analysis, table detection,
 classification, cleanup, and bounded parallel page processing. Python stays a
 thin orchestration layer and exposes the native result lazily through `ijson`.
+
+Text and vector edges are captured in one native page pass. Ruled tables use
+their line grid; borderless tables are assembled from local, contiguous
+multi-column row runs so long tables remain valid without turning unrelated
+page columns into one giant table.
 
 The native bridge serializes MuPDF access where its process-global state requires
 it, while document-level work uses a bounded worker and reorder window. This
