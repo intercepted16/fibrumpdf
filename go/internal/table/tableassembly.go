@@ -1,7 +1,6 @@
 package table
 
 import (
-	"slices"
 	"sort"
 
 	"github.com/fibrumpdf/go/internal/geometry"
@@ -34,54 +33,6 @@ func groupRows(cells []geometry.Rect, pageRect geometry.Rect) []Row {
 	avgHeight /= float32(len(cells))
 	groupTolerance := adaptiveRowGroupingTolerance(avgHeight, pageRect)
 
-	byY := make(map[float32][]geometry.Rect)
-	for _, cell := range cells {
-		matchedY := float32(-1)
-		for y := range byY {
-			if geometry.Abs32(cell.Y0-y) < avgHeight*0.3 {
-				matchedY = y
-				break
-			}
-		}
-		if matchedY >= 0 {
-			byY[matchedY] = append(byY[matchedY], cell)
-		} else {
-			byY[cell.Y0] = []geometry.Rect{cell}
-		}
-	}
-
-	yPositions := make([]float32, 0, len(byY))
-	for y := range byY {
-		yPositions = append(yPositions, y)
-	}
-	slices.Sort(yPositions)
-
-	rowHeights := make([]float32, 0, len(yPositions))
-	for _, y := range yPositions {
-		height := float32(0)
-		for _, cell := range byY[y] {
-			height = geometry.Max32(height, cell.Height())
-		}
-		rowHeights = append(rowHeights, height)
-	}
-	if len(rowHeights) >= 2 {
-		average := float32(0)
-		for _, height := range rowHeights {
-			average += height
-		}
-		average /= float32(len(rowHeights))
-		filtered := make([]geometry.Rect, 0, len(cells))
-		for i, y := range yPositions {
-			ratio := rowHeights[i] / average
-			if average == 0 || rowHeights[i] == 0 || (ratio > 0.4 && ratio < 2.5) {
-				filtered = append(filtered, byY[y]...)
-			}
-		}
-		if len(filtered) >= len(cells)*3/4 {
-			cells = filtered
-		}
-	}
-
 	sortTolerance := avgHeight * 0.2
 	sort.Slice(cells, func(i, j int) bool {
 		if dy := cells[i].Y0 - cells[j].Y0; geometry.Abs32(dy) > sortTolerance {
@@ -89,8 +40,38 @@ func groupRows(cells []geometry.Rect, pageRect geometry.Rect) []Row {
 		}
 		return cells[i].X0 < cells[j].X0
 	})
+	type heightRow struct {
+		start, end int
+		height     float32
+	}
+	heightRows := make([]heightRow, 0, len(cells)/2)
+	for start := 0; start < len(cells); {
+		end, height := start+1, cells[start].Height()
+		for end < len(cells) && geometry.Abs32(cells[end].Y0-cells[start].Y0) < avgHeight*0.3 {
+			height = geometry.Max32(height, cells[end].Height())
+			end++
+		}
+		heightRows = append(heightRows, heightRow{start: start, end: end, height: height})
+		start = end
+	}
+	if len(heightRows) >= 2 {
+		average := float32(0)
+		for _, row := range heightRows {
+			average += row.height
+		}
+		average /= float32(len(heightRows))
+		filtered := make([]geometry.Rect, 0, len(cells))
+		for _, row := range heightRows {
+			if ratio := row.height / average; average == 0 || row.height == 0 || (ratio > 0.4 && ratio < 2.5) {
+				filtered = append(filtered, cells[row.start:row.end]...)
+			}
+		}
+		if len(filtered) >= len(cells)*3/4 {
+			cells = filtered
+		}
+	}
 
-	rows := make([]Row, 0, len(yPositions))
+	rows := make([]Row, 0, len(cells)/2)
 	for start := 0; start < len(cells); {
 		end := start + 1
 		for end < len(cells) && geometry.Abs32(cells[end].Y0-cells[start].Y0) <= groupTolerance {
