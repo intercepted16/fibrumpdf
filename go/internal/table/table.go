@@ -86,15 +86,20 @@ func findCells(pageRect geometry.Rect, hEdges, vEdges []Edge, avgEdgeSpacing flo
 		return nil
 	}
 
-	var cells []geometry.Rect
+	minEdges := 2
+	if len(gridCols) >= 6 || len(gridRows) >= 6 || (len(gridCols) >= 4 && len(gridRows) >= 4) {
+		minEdges = 1
+	}
+	candidates := make([]geometry.Rect, 0, (len(gridRows)-1)*(len(gridCols)-1))
+	cells := make([]geometry.Rect, 0, cap(candidates))
 	for ri := 0; ri < len(gridRows)-1; ri++ {
 		for ci := 0; ci < len(gridCols)-1; ci++ {
 			cell := geometry.Rect{X0: gridCols[ci], Y0: gridRows[ri], X1: gridCols[ci+1], Y1: gridRows[ri+1]}
 			w, h := cell.Width(), cell.Height()
-			sizeOk := w > minSize && w < maxW && h > minSize && h < maxH
-			if !sizeOk {
+			if w <= minSize || w >= maxW || h <= minSize || h >= maxH {
 				continue
 			}
+			candidates = append(candidates, cell)
 
 			edges := [4]bool{
 				hasEdge(hEdges, float64(cell.X0), float64(cell.Y0), float64(cell.X1), float64(cell.Y0), eps),
@@ -109,28 +114,15 @@ func findCells(pageRect geometry.Rect, hEdges, vEdges []Edge, avgEdgeSpacing flo
 				}
 			}
 
-			minEdges := 2
-			if (len(gridCols) >= 4 && len(gridRows) >= 4) || len(gridCols) >= 6 || len(gridRows) >= 6 {
-				minEdges = 1
-			}
 			if edgeCount >= minEdges {
 				cells = append(cells, cell)
 			}
 		}
 	}
 
-	if len(cells) < 3 && len(gridRows) >= 2 && len(gridCols) >= 2 {
-		cells = cells[:0]
-		for ri := 0; ri < len(gridRows)-1; ri++ {
-			for ci := 0; ci < len(gridCols)-1; ci++ {
-				cell := geometry.Rect{X0: gridCols[ci], Y0: gridRows[ri], X1: gridCols[ci+1], Y1: gridRows[ri+1]}
-				if w, h := cell.Width(), cell.Height(); w > minSize && w < maxW && h > minSize && h < maxH {
-					cells = append(cells, cell)
-				}
-			}
-		}
+	if len(cells) < 3 {
+		return candidates
 	}
-
 	return cells
 }
 

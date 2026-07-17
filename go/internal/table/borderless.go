@@ -106,44 +106,37 @@ func detectBorderlessTables(raw *rawdata.PageData, pageRect geometry.Rect) *Tabl
 	}
 
 	midCluster := newCluster1D(xTol * 2)
-	type clusterAcc struct{ widths []float32 }
-	clusterAccs := map[int]*clusterAcc{}
+	clusterWidths := make(map[int][]float32)
 	for _, g := range allGaps {
 		idx := midCluster.add(g.mid)
-		if clusterAccs[idx] == nil {
-			clusterAccs[idx] = &clusterAcc{}
-		}
-		clusterAccs[idx].widths = append(clusterAccs[idx].widths, g.width)
+		clusterWidths[idx] = append(clusterWidths[idx], g.width)
 	}
 
 	const minBandFraction = 0.12
 	nRowsF := float32(len(rows))
 
-	type wsBand struct {
-		center float32
-	}
-	var bands []wsBand
-	for idx, acc := range clusterAccs {
+	var bands []float32
+	for idx, widths := range clusterWidths {
 		if idx >= len(midCluster.centers) {
 			continue
 		}
-		rowFrac := float32(len(acc.widths)) / nRowsF
-		if rowFrac < minBandFraction && len(acc.widths) < 4 {
+		rowFrac := float32(len(widths)) / nRowsF
+		if rowFrac < minBandFraction && len(widths) < 4 {
 			continue
 		}
-		bands = append(bands, wsBand{center: midCluster.centers[idx]})
+		bands = append(bands, midCluster.centers[idx])
 	}
 	if len(bands) == 0 {
 		Logger.Debug("borderless: no consistent whitespace bands")
 		return nil
 	}
-	sort.Slice(bands, func(i, j int) bool { return bands[i].center < bands[j].center })
+	sort.Slice(bands, func(i, j int) bool { return bands[i] < bands[j] })
 	Logger.Debug("borderless: whitespace bands", "count", len(bands))
 
 	dividers := make([]float32, 0, len(bands)+2)
 	dividers = append(dividers, pageRect.X0)
-	for _, b := range bands {
-		dividers = append(dividers, b.center)
+	for _, center := range bands {
+		dividers = append(dividers, center)
 	}
 	dividers = append(dividers, pageRect.X1)
 
@@ -229,12 +222,6 @@ func detectBorderlessTables(raw *rawdata.PageData, pageRect geometry.Rect) *Tabl
 		cellBBoxes[k] = blBBoxOfChars(raw, chars)
 	}
 
-	rowUsable := make([]bool, len(rows))
-	for i := range rowUsable {
-		rowUsable[i] = true
-	}
-	filteredRows := 0
-
 	multiColRows, totalContentRows, col0OnlyRows := 0, 0, 0
 	for ri := range rows {
 		occupied, hasCol0 := 0, false
@@ -265,8 +252,7 @@ func detectBorderlessTables(raw *rawdata.PageData, pageRect geometry.Rect) *Tabl
 	multiColFrac := float32(multiColRows) / float32(totalContentRows)
 	Logger.Debug("borderless: fill stats",
 		"multiColFrac", multiColFrac,
-		"multiColRows", multiColRows, "totalRows", totalContentRows,
-		"filteredRows", filteredRows)
+		"multiColRows", multiColRows, "totalRows", totalContentRows)
 
 	const minMultiColFrac = 0.07
 	if multiColFrac < minMultiColFrac && multiColRows < 2 {
@@ -282,9 +268,6 @@ func detectBorderlessTables(raw *rawdata.PageData, pageRect geometry.Rect) *Tabl
 
 	rowsOut := make([]Row, 0, len(rows))
 	for r := 0; r < len(rows); r++ {
-		if !rowUsable[r] {
-			continue
-		}
 		rowCells := make([]Cell, nCols)
 		var rowBBox geometry.Rect
 		for c := 0; c < nCols; c++ {
