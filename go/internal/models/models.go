@@ -214,7 +214,3 @@ type Page struct {
 	Number int     `json:"page"`
 	Data   []Block `json:"data"`
 }
-
-type Document struct{ Pages []Page }
-
-func (d *Document) MarshalJSON() ([]byte, error) { return json.Marshal(d.Pages) }
