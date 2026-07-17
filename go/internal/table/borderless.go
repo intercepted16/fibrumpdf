@@ -18,11 +18,9 @@ func detectBorderlessTables(raw *rawdata.PageData, pageRect geometry.Rect) *Tabl
 	avgCharWidth := computeAvgCharWidth(raw.Chars)
 	pageArea := pageRect.Width() * pageRect.Height()
 	charDensity := float32(len(raw.Chars)) / pageArea
-	tolCfg := NewDefaultToleranceConfig()
-
-	xTol := ComputeColumnAnchorTolerance(avgCharWidth, charDensity, tolCfg)
-	yTol := ComputeRowClusterTolerance(pageRect.Height(), charDensity, tolCfg)
-	wordGap := ComputeWordGap(avgCharWidth, tolCfg)
+	xTol := geometry.Max32(avgCharWidth*(2+charDensity*50), 12)
+	yTol := geometry.Max32(pageRect.Height()*0.005*(1+charDensity*20), 3)
+	wordGap := geometry.Max32(avgCharWidth*1.6, 6)
 
 	if charDensity > 0.010 && len(raw.Edges) < 3 {
 		Logger.Debug("borderless: skipping dense text page", "charDensity", charDensity)
@@ -38,16 +36,15 @@ func detectBorderlessTables(raw *rawdata.PageData, pageRect geometry.Rect) *Tabl
 		chars  []int
 	}
 	rows := make([]rowCluster, 0, len(raw.Chars)/20)
-	rowTol := ComputeRowYTolerance(yTol, 1.1)
-	yCluster := NewCluster1D(rowTol)
+	yCluster := newCluster1D(yTol * 1.1)
 	for i, ch := range raw.Chars {
 		cy := (ch.BBox.Y0 + ch.BBox.Y1) / 2
-		idx := yCluster.Add(cy)
+		idx := yCluster.add(cy)
 		if idx >= len(rows) {
-			rows = append(rows, rowCluster{center: yCluster.Centers[idx], chars: make([]int, 0, 20)})
+			rows = append(rows, rowCluster{center: yCluster.centers[idx], chars: make([]int, 0, 20)})
 		}
 		rows[idx].chars = append(rows[idx].chars, i)
-		rows[idx].center = yCluster.Centers[idx]
+		rows[idx].center = yCluster.centers[idx]
 	}
 	if len(rows) < 2 {
 		Logger.Debug("borderless: not enough rows", "found", len(rows))
@@ -107,11 +104,11 @@ func detectBorderlessTables(raw *rawdata.PageData, pageRect geometry.Rect) *Tabl
 		return nil
 	}
 
-	midCluster := NewCluster1D(xTol * 2)
+	midCluster := newCluster1D(xTol * 2)
 	type clusterAcc struct{ widths []float32 }
 	clusterAccs := map[int]*clusterAcc{}
 	for _, g := range allGaps {
-		idx := midCluster.Add(g.mid)
+		idx := midCluster.add(g.mid)
 		if clusterAccs[idx] == nil {
 			clusterAccs[idx] = &clusterAcc{}
 		}
@@ -126,14 +123,14 @@ func detectBorderlessTables(raw *rawdata.PageData, pageRect geometry.Rect) *Tabl
 	}
 	var bands []wsBand
 	for idx, acc := range clusterAccs {
-		if idx >= len(midCluster.Centers) {
+		if idx >= len(midCluster.centers) {
 			continue
 		}
 		rowFrac := float32(len(acc.widths)) / nRowsF
 		if rowFrac < minBandFraction && len(acc.widths) < 4 {
 			continue
 		}
-		bands = append(bands, wsBand{center: midCluster.Centers[idx]})
+		bands = append(bands, wsBand{center: midCluster.centers[idx]})
 	}
 	if len(bands) == 0 {
 		Logger.Debug("borderless: no consistent whitespace bands")
@@ -149,10 +146,10 @@ func detectBorderlessTables(raw *rawdata.PageData, pageRect geometry.Rect) *Tabl
 	}
 	dividers = append(dividers, pageRect.X1)
 
-	minColWidth := avgCharWidth * tolCfg.ColumnMergeMultiplier
+	minColWidth := avgCharWidth * 3.8
 	dividers = blMergeNarrowColumns(dividers, minColWidth)
-	for len(dividers)-1 > tolCfg.MaxColumnCount {
-		minColWidth *= tolCfg.ColumnMergeGrowthFactor
+	for len(dividers)-1 > 16 {
+		minColWidth *= 1.35
 		dividers = blMergeNarrowColumns(dividers, minColWidth)
 	}
 	nCols := len(dividers) - 1
@@ -182,7 +179,7 @@ func detectBorderlessTables(raw *rawdata.PageData, pageRect geometry.Rect) *Tabl
 	}
 
 	cellChars := make(map[cellKey][]int, len(rows)*2)
-	segmentGap := ComputeSegmentGap(avgCharWidth, tolCfg)
+	segmentGap := geometry.Max32(avgCharWidth*1.8, 4)
 
 	for ri := range rows {
 		idxs := rowSorted[ri]
@@ -306,8 +303,7 @@ func detectBorderlessTables(raw *rawdata.PageData, pageRect geometry.Rect) *Tabl
 		return nil
 	}
 
-	assembler := NewDefaultTableAssembler(NewDefaultTableAssemblyConfig())
-	assembled := assembler.AssembleFromRows(rowsOut, pageRect)
+	assembled := assembleRows(rowsOut, pageRect)
 	if assembled == nil || len(assembled.Tables) == 0 {
 		Logger.Debug("borderless: no assembled tables")
 		return nil

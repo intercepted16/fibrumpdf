@@ -135,8 +135,8 @@ func findCells(pageRect geometry.Rect, hEdges, vEdges []Edge, avgEdgeSpacing flo
 }
 
 func findGridLines(hEdges, vEdges []Edge, eps float64, pageRect geometry.Rect) ([]float32, []float32) {
-	xCluster := NewCluster1D(float32(eps))
-	yCluster := NewCluster1D(float32(eps))
+	xCluster := newCluster1D(float32(eps))
+	yCluster := newCluster1D(float32(eps))
 	minVLen := float64(pageRect.Height()) * 0.02
 	minHLen := float64(pageRect.Width()) * 0.02
 	for _, e := range vEdges {
@@ -144,27 +144,27 @@ func findGridLines(hEdges, vEdges []Edge, eps float64, pageRect geometry.Rect) (
 		if edgeLen < minVLen {
 			continue
 		}
-		xCluster.Add(float32(e.X0))
+		xCluster.add(float32(e.X0))
 	}
 	for _, e := range hEdges {
 		edgeLen := math.Abs(e.X1 - e.X0)
 		if edgeLen < minHLen {
 			continue
 		}
-		yCluster.Add(float32(e.Y0))
+		yCluster.add(float32(e.Y0))
 	}
 	minXCount := 1
 	minYCount := 1
 	var gridCols []float32
-	for i, count := range xCluster.Counts {
+	for i, count := range xCluster.counts {
 		if count >= minXCount {
-			gridCols = append(gridCols, xCluster.Centers[i])
+			gridCols = append(gridCols, xCluster.centers[i])
 		}
 	}
 	var gridRows []float32
-	for i, count := range yCluster.Counts {
+	for i, count := range yCluster.counts {
 		if count >= minYCount {
-			gridRows = append(gridRows, yCluster.Centers[i])
+			gridRows = append(gridRows, yCluster.centers[i])
 		}
 	}
 	slices.Sort(gridCols)
@@ -222,8 +222,7 @@ func groupCellsIntoTables(cells []geometry.Rect, pageRect geometry.Rect) *TableA
 	if len(cells) == 0 {
 		return nil
 	}
-	assembler := NewDefaultTableAssembler(NewDefaultTableAssemblyConfig())
-	tables := assembler.AssembleFromCells(cells, pageRect)
+	tables := assembleCells(cells, pageRect)
 	if tables == nil || tables.isEmpty() {
 		return nil
 	}
@@ -414,8 +413,7 @@ func (tables *TableArray) normalizeColumns(pageRect geometry.Rect) {
 	}
 	for ti := range tables.Tables {
 		tbl := &tables.Tables[ti]
-		grid := NewTableGrid(tbl)
-		grid.Normalize(GridNormalizeOptions{NormalizeColumns: true, PreserveEmptyColumns: shouldPreserveEmptyColumns(*tbl), PageRect: pageRect})
+		normalizeGrid(tbl, pageRect, shouldPreserveEmptyColumns(*tbl))
 	}
 }
 

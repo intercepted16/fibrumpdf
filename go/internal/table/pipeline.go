@@ -1,9 +1,9 @@
 package table
 
 import (
-	"math"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/fibrumpdf/go/internal/geometry"
 	"github.com/fibrumpdf/go/internal/models"
@@ -11,90 +11,42 @@ import (
 	"github.com/fibrumpdf/go/internal/textutil"
 )
 
-// ExtractAndConvertTables runs a linear extraction flow with boundary checks only.
 func ExtractAndConvertTables(raw *rawdata.PageData) []models.Block {
 	if raw == nil {
 		return nil
 	}
-	pipeline := newTableExtractionPipeline()
-	return pipeline.run(raw)
-}
-
-type tableExtractionPipeline struct {
-	detector     tableDetector
-	materializer tableMaterializer
-	selector     tableSelector
-	converter    tableConverter
-}
-
-type detectedTables struct{ tables []Table }
-type materializedTables struct{ tables []Table }
-type selectedTables struct{ tables []Table }
-
-func newTableExtractionPipeline() tableExtractionPipeline {
-	return tableExtractionPipeline{}
-}
-
-func (p tableExtractionPipeline) run(raw *rawdata.PageData) []models.Block {
-	detected := p.detector.run(raw)
-	selected := selectedTables{}
-	if len(detected.tables) > 0 {
-		materialized := p.materializer.run(raw, detected)
-		selected = p.selector.run(raw.PageRect(), raw, materialized)
-		if len(selected.tables) > 0 && shouldTryBorderlessFallback(selected.tables) {
-			borderlessDetected := p.detector.runBorderless(raw)
-			if len(borderlessDetected.tables) > 0 {
-				borderlessMaterialized := p.materializer.run(raw, borderlessDetected)
-				borderlessSelected := p.selector.run(raw.PageRect(), raw, borderlessMaterialized)
-				if chooseBetterTables(borderlessSelected.tables, selected.tables) {
-					selected = borderlessSelected
-				}
-			}
+	pageRect := raw.PageRect()
+	selected := selectTables(pageRect, materializeTables(raw, detectRuledTables(raw)))
+	if len(selected) == 0 || needsBorderlessFallback(selected) {
+		borderless := selectTables(pageRect, materializeTables(raw, detectBorderless(raw)))
+		if chooseBetterTables(borderless, selected) {
+			selected = borderless
 		}
 	}
-	if len(selected.tables) == 0 {
-		borderlessDetected := p.detector.runBorderless(raw)
-		if len(borderlessDetected.tables) > 0 {
-			borderlessMaterialized := p.materializer.run(raw, borderlessDetected)
-			selected = p.selector.run(raw.PageRect(), raw, borderlessMaterialized)
+	return convertTables(selected)
+}
+
+func detectRuledTables(raw *rawdata.PageData) []Table {
+	if len(raw.Edges) >= 3 && (len(raw.Edges) <= maxEdgesForGrid || len(raw.Chars) <= heavyCharCount) {
+		tables := detectTables(raw.Edges, raw.PageRect(), raw.PageNumber)
+		if tables != nil && !tables.isEmpty() {
+			return tables.Tables
 		}
 	}
-	if len(selected.tables) == 0 {
+	return nil
+}
+
+func detectBorderless(raw *rawdata.PageData) []Table {
+	tables := detectBorderlessTables(raw, raw.PageRect())
+	if tables == nil || tables.isEmpty() {
 		return nil
 	}
-	return p.converter.run(selected)
+	return tables.Tables
 }
 
-type tableDetector struct{}
-
-func (s tableDetector) run(raw *rawdata.PageData) detectedTables {
-	pageRect := raw.PageRect()
-	// Try grid-based detection first (requires edges)
-	if len(raw.Edges) >= 3 && (len(raw.Edges) <= maxEdgesForGrid || len(raw.Chars) <= heavyCharCount) {
-		tables := detectTables(raw.Edges, pageRect, raw.PageNumber)
-		if tables != nil && !tables.isEmpty() {
-			return detectedTables{tables: tables.Tables}
-		}
-	}
-	// No grid tables found
-	return detectedTables{}
-}
-
-func (s tableDetector) runBorderless(raw *rawdata.PageData) detectedTables {
-	pageRect := raw.PageRect()
-	tables := detectBorderlessTables(raw, pageRect)
-	if tables == nil || tables.isEmpty() {
-		return detectedTables{}
-	}
-	return detectedTables{tables: tables.Tables}
-}
-
-func shouldTryBorderlessFallback(tables []Table) bool {
+func needsBorderlessFallback(tables []Table) bool {
 	for _, tbl := range tables {
-		if !tbl.RuledTable {
-			continue
-		}
-		if ruledTableLooksOversegmented(tbl) {
+		if tbl.RuledTable && ruledTableLooksOversegmented(tbl) {
 			return true
 		}
 	}
@@ -166,15 +118,10 @@ func tableSetQualityScore(tables []Table) float32 {
 	return score
 }
 
-type tableMaterializer struct{}
-
-func (s tableMaterializer) run(raw *rawdata.PageData, in detectedTables) materializedTables {
-	if len(in.tables) == 0 {
-		return materializedTables{}
-	}
-	tables := in.tables
-	for ti := range tables {
-		tbl := &tables[ti]
+func materializeTables(raw *rawdata.PageData, detectedTables []Table) []Table {
+	tables := make([]Table, 0, len(detectedTables))
+	for _, detected := range detectedTables {
+		tbl := detected
 		tableChars := charsNearRect(raw.Chars, tbl.BBox)
 		if len(tableChars) == 0 {
 			continue
@@ -192,35 +139,26 @@ func (s tableMaterializer) run(raw *rawdata.PageData, in detectedTables) materia
 				}
 			}
 		}
-		cleanupMaterializedTable(tbl)
+		cleanupMaterializedTable(&tbl)
+		tables = append(tables, tbl)
 	}
-	return materializedTables{tables: tables}
+	return tables
 }
 
-type tableSelector struct{}
-
-func (s tableSelector) run(pageRect geometry.Rect, raw *rawdata.PageData, in materializedTables) selectedTables {
-	if len(in.tables) == 0 {
-		return selectedTables{}
-	}
-	candidates := make([]Table, 0, len(in.tables))
-	for _, tbl := range in.tables {
+func selectTables(pageRect geometry.Rect, tables []Table) []Table {
+	candidates := make([]Table, 0, len(tables))
+	for _, tbl := range tables {
 		if !hasTableShape(tbl) || isTableOversized(tbl.BBox, pageRect) {
 			continue
 		}
 		candidates = append(candidates, tbl)
 	}
-	if len(candidates) == 0 {
-		return selectedTables{}
-	}
-	return selectedTables{tables: deduplicateTables(candidates)}
+	return deduplicateTables(candidates)
 }
 
-type tableConverter struct{}
-
-func (s tableConverter) run(in selectedTables) []models.Block {
-	blocks := make([]models.Block, 0, len(in.tables))
-	for _, tbl := range in.tables {
+func convertTables(tables []Table) []models.Block {
+	blocks := make([]models.Block, 0, len(tables))
+	for _, tbl := range tables {
 		rows, visibleRows := convertTableRows(tbl)
 		if len(rows) < 2 {
 			continue
@@ -552,349 +490,76 @@ func convertTableRows(tbl Table) ([]models.TableRow, int) {
 	return rows, visibleRows
 }
 
-func cleanupMaterializedTable(tbl *Table) {
-	if tbl == nil || len(tbl.Rows) == 0 {
+func cleanupMaterializedTable(table *Table) {
+	if table == nil || len(table.Rows) == 0 {
 		return
 	}
-	maxCols := 0
-	for _, row := range tbl.Rows {
-		if len(row.Cells) > maxCols {
-			maxCols = len(row.Cells)
-		}
-	}
-	if maxCols == 0 {
-		return
-	}
-	for i := range tbl.Rows {
-		if len(tbl.Rows[i].Cells) >= maxCols {
+	padRows(table)
+	mergeJoinedColumns(table)
+	dropTextEmptyColumns(table)
+}
+
+func mergeJoinedColumns(table *Table) {
+	for column := 0; column+1 < len(table.Rows[0].Cells); {
+		if !columnsContainJoinedText(table, column) {
+			column++
 			continue
 		}
-		padded := make([]Cell, maxCols)
-		copy(padded, tbl.Rows[i].Cells)
-		tbl.Rows[i].Cells = padded
-	}
-	if tbl.RuledTable {
-		dropFullyEmptyColumns(tbl)
-		splitPairedLineRows(tbl)
-	} else {
-		dropTextEmptyColumns(tbl)
-		mergeCurrencyValueColumns(tbl)
-	}
-	mergeContinuationRows(tbl)
-}
-
-func dropFullyEmptyColumns(tbl *Table) {
-	if tbl == nil || len(tbl.Rows) == 0 || len(tbl.Rows[0].Cells) == 0 {
-		return
-	}
-	colCount := len(tbl.Rows[0].Cells)
-	keep := make([]bool, colCount)
-	for _, row := range tbl.Rows {
-		for ci := 0; ci < min(colCount, len(row.Cells)); ci++ {
-			if !row.Cells[ci].BBox.IsEmpty() || strings.TrimSpace(row.Cells[ci].Text) != "" {
-				keep[ci] = true
+		for rowIndex := range table.Rows {
+			row := &table.Rows[rowIndex]
+			left, right := row.Cells[column], row.Cells[column+1]
+			if strings.TrimSpace(left.Text) == "" {
+				left = right
+			} else if strings.TrimSpace(right.Text) != "" {
+				left.Text = strings.TrimSpace(left.Text) + strings.TrimSpace(right.Text)
+				left.BBox = left.BBox.Union(right.BBox)
 			}
+			row.Cells[column] = left
+			row.Cells = append(row.Cells[:column+1], row.Cells[column+2:]...)
 		}
-	}
-	newCount := 0
-	for _, ok := range keep {
-		if ok {
-			newCount++
+		if column > 0 {
+			column--
 		}
-	}
-	if newCount == 0 || newCount == colCount {
-		return
-	}
-	for ri := range tbl.Rows {
-		newCells := make([]Cell, 0, newCount)
-		for ci, ok := range keep {
-			if ok && ci < len(tbl.Rows[ri].Cells) {
-				newCells = append(newCells, tbl.Rows[ri].Cells[ci])
-			}
-		}
-		tbl.Rows[ri].Cells = newCells
 	}
 }
 
-func mergeContinuationRows(tbl *Table) {
-	if tbl == nil || len(tbl.Rows) < 2 {
-		return
-	}
-
-	gapLimit := continuationGapLimit(tbl.Rows)
-	keep := make([]Row, 0, len(tbl.Rows))
-	keep = append(keep, tbl.Rows[0])
-
-	for ri := 1; ri < len(tbl.Rows); ri++ {
-		curr := tbl.Rows[ri]
-		prev := &keep[len(keep)-1]
-
-		currCount, currCol := populatedCellInfo(curr)
-		prevCount, _ := populatedCellInfo(*prev)
-		if currCount != 1 || prevCount < 2 || currCol < 0 || currCol >= len(prev.Cells) {
-			keep = append(keep, curr)
+func columnsContainJoinedText(table *Table, column int) bool {
+	found := false
+	for _, row := range table.Rows {
+		left, right := row.Cells[column], row.Cells[column+1]
+		leftText, rightText := strings.TrimSpace(left.Text), strings.TrimSpace(right.Text)
+		if leftText == "" || rightText == "" {
 			continue
 		}
-
-		currText := strings.TrimSpace(curr.Cells[currCol].Text)
-		if currText == "" {
-			keep = append(keep, curr)
-			continue
-		}
-		if textHasDigit(currText) || len([]rune(currText)) > 24 {
-			keep = append(keep, curr)
-			continue
-		}
-
-		gap := curr.BBox.Y0 - prev.BBox.Y1
-		if gap > gapLimit {
-			keep = append(keep, curr)
-			continue
-		}
-
-		if curr.BBox.X0 > prev.BBox.X1 || curr.BBox.X1 < prev.BBox.X0 {
-			keep = append(keep, curr)
-			continue
-		}
-
-		mergedText := strings.TrimSpace(prev.Cells[currCol].Text)
-		if mergedText == "" {
-			prev.Cells[currCol].Text = currText
-		} else {
-			prev.Cells[currCol].Text = mergedText + " " + currText
-		}
-		if prev.Cells[currCol].BBox.IsEmpty() {
-			prev.Cells[currCol].BBox = curr.Cells[currCol].BBox
-		} else {
-			prev.Cells[currCol].BBox = prev.Cells[currCol].BBox.Union(curr.Cells[currCol].BBox)
-		}
-		if !curr.BBox.IsEmpty() {
-			if prev.BBox.IsEmpty() {
-				prev.BBox = curr.BBox
-			} else {
-				prev.BBox = prev.BBox.Union(curr.BBox)
-			}
-		}
-	}
-
-	tbl.Rows = keep
-}
-
-func continuationGapLimit(rows []Row) float32 {
-	var heights []float32
-	for _, row := range rows {
-		h := row.BBox.Height()
-		if h > 0 {
-			heights = append(heights, h)
-		}
-	}
-	if len(heights) == 0 {
-		return 0
-	}
-	sort.Slice(heights, func(i, j int) bool { return heights[i] < heights[j] })
-	median := heights[len(heights)/2]
-	return float32(math.Max(float64(median*0.45), 1.5))
-}
-
-func populatedCellInfo(row Row) (count int, lastCol int) {
-	lastCol = -1
-	for ci := range row.Cells {
-		if strings.TrimSpace(row.Cells[ci].Text) == "" {
-			continue
-		}
-		count++
-		lastCol = ci
-	}
-	return count, lastCol
-}
-
-func textHasDigit(text string) bool {
-	for _, r := range text {
-		if r >= '0' && r <= '9' {
-			return true
-		}
-	}
-	return false
-}
-
-func dropTextEmptyColumns(tbl *Table) {
-	if tbl == nil || len(tbl.Rows) == 0 || len(tbl.Rows[0].Cells) == 0 {
-		return
-	}
-	colCount := len(tbl.Rows[0].Cells)
-	keep := make([]bool, colCount)
-	for _, row := range tbl.Rows {
-		for ci := 0; ci < min(colCount, len(row.Cells)); ci++ {
-			if strings.TrimSpace(row.Cells[ci].Text) != "" {
-				keep[ci] = true
-			}
-		}
-	}
-	newCount := 0
-	for _, ok := range keep {
-		if ok {
-			newCount++
-		}
-	}
-	if newCount == 0 || newCount == colCount {
-		return
-	}
-	for ri := range tbl.Rows {
-		newCells := make([]Cell, 0, newCount)
-		for ci, ok := range keep {
-			if ok && ci < len(tbl.Rows[ri].Cells) {
-				newCells = append(newCells, tbl.Rows[ri].Cells[ci])
-			}
-		}
-		tbl.Rows[ri].Cells = newCells
-	}
-}
-
-func mergeCurrencyValueColumns(tbl *Table) {
-	if tbl == nil || len(tbl.Rows) == 0 || len(tbl.Rows[0].Cells) < 2 {
-		return
-	}
-	colCount := len(tbl.Rows[0].Cells)
-	for ci := 0; ci < colCount-1; ci++ {
-		prefixRows := 0
-		for _, row := range tbl.Rows {
-			if ci+1 >= len(row.Cells) {
-				continue
-			}
-			left := strings.TrimSpace(row.Cells[ci].Text)
-			right := strings.TrimSpace(row.Cells[ci+1].Text)
-			if isCurrencyPrefix(left) && looksNumericValue(right) {
-				prefixRows++
-			}
-		}
-		if prefixRows == 0 {
-			continue
-		}
-		for ri := range tbl.Rows {
-			if ci+1 >= len(tbl.Rows[ri].Cells) {
-				continue
-			}
-			left := strings.TrimSpace(tbl.Rows[ri].Cells[ci].Text)
-			right := strings.TrimSpace(tbl.Rows[ri].Cells[ci+1].Text)
-			if !isCurrencyPrefix(left) || !looksNumericValue(right) {
-				continue
-			}
-			tbl.Rows[ri].Cells[ci+1].Text = left + right
-			tbl.Rows[ri].Cells[ci+1].BBox = tbl.Rows[ri].Cells[ci].BBox.Union(tbl.Rows[ri].Cells[ci+1].BBox)
-			tbl.Rows[ri].Cells[ci] = Cell{}
-		}
-		dropTextEmptyColumns(tbl)
-		colCount = len(tbl.Rows[0].Cells)
-		ci--
-	}
-}
-
-func splitPairedLineRows(tbl *Table) {
-	if tbl == nil || len(tbl.Rows) == 0 {
-		return
-	}
-	rows := make([]Row, 0, len(tbl.Rows))
-	for _, row := range tbl.Rows {
-		populated := 0
-		paired := 0
-		for ci := range row.Cells {
-			text := strings.TrimSpace(row.Cells[ci].Text)
-			if text == "" {
-				continue
-			}
-			populated++
-			parts := splitLineParts(text)
-			if len(parts) != 2 {
-				continue
-			}
-			if len([]rune(parts[0])) > 24 || len([]rune(parts[1])) > 24 {
-				continue
-			}
-			paired++
-		}
-		if populated < 3 || paired < 3 || paired*2 < populated {
-			rows = append(rows, row)
-			continue
-		}
-
-		top := Row{Cells: make([]Cell, len(row.Cells))}
-		bottom := Row{Cells: make([]Cell, len(row.Cells))}
-		for ci := range row.Cells {
-			cell := row.Cells[ci]
-			parts := splitLineParts(cell.Text)
-			if len(parts) == 2 {
-				top.Cells[ci].Text = parts[0]
-				bottom.Cells[ci].Text = parts[1]
-			} else {
-				top.Cells[ci].Text = strings.TrimSpace(cell.Text)
-			}
-			if cell.BBox.IsEmpty() {
-				continue
-			}
-			mid := (cell.BBox.Y0 + cell.BBox.Y1) * 0.5
-			topBBox := geometry.Rect{X0: cell.BBox.X0, Y0: cell.BBox.Y0, X1: cell.BBox.X1, Y1: mid}
-			bottomBBox := geometry.Rect{X0: cell.BBox.X0, Y0: mid, X1: cell.BBox.X1, Y1: cell.BBox.Y1}
-			top.Cells[ci].BBox = topBBox
-			if len(parts) == 2 {
-				bottom.Cells[ci].BBox = bottomBBox
-			}
-			if top.BBox.IsEmpty() {
-				top.BBox = topBBox
-			} else {
-				top.BBox = top.BBox.Union(topBBox)
-			}
-			if len(parts) == 2 {
-				if bottom.BBox.IsEmpty() {
-					bottom.BBox = bottomBBox
-				} else {
-					bottom.BBox = bottom.BBox.Union(bottomBBox)
-				}
-			}
-		}
-		rows = append(rows, top)
-		if !bottom.BBox.IsEmpty() {
-			rows = append(rows, bottom)
-		}
-	}
-	tbl.Rows = rows
-}
-
-func splitLineParts(text string) []string {
-	if strings.TrimSpace(text) == "" {
-		return nil
-	}
-	raw := strings.Split(text, "<br>")
-	parts := make([]string, 0, len(raw))
-	for _, p := range raw {
-		p = strings.TrimSpace(p)
-		if p != "" {
-			parts = append(parts, p)
-		}
-	}
-	return parts
-}
-
-func isCurrencyPrefix(s string) bool {
-	switch s {
-	case "$", "€", "£", "¥":
-		return true
-	default:
-		return false
-	}
-}
-
-func looksNumericValue(s string) bool {
-	hasDigit := false
-	for _, r := range s {
-		if r >= '0' && r <= '9' {
-			hasDigit = true
-			continue
-		}
-		switch r {
-		case ',', '.', ' ', '-', '(', ')':
-		default:
+		if gap := right.BBox.X0 - left.BBox.X1; gap < -1 || gap > 2 {
 			return false
 		}
+		leftRunes, rightRunes := []rune(leftText), []rune(rightText)
+		joinedWord := unicode.IsLetter(leftRunes[len(leftRunes)-1]) && unicode.IsLower(rightRunes[0])
+		joinedNumber := rightRunes[0] == '.' && strings.ContainsAny(leftText, "0123456789")
+		if !joinedWord && !joinedNumber {
+			return false
+		}
+		found = true
 	}
-	return hasDigit
+	return found
+}
+
+func dropTextEmptyColumns(table *Table) {
+	columns := len(table.Rows[0].Cells)
+	keep := make([]bool, columns)
+	for _, row := range table.Rows {
+		for column, cell := range row.Cells {
+			keep[column] = keep[column] || strings.TrimSpace(cell.Text) != ""
+		}
+	}
+	for rowIndex := range table.Rows {
+		cells := table.Rows[rowIndex].Cells[:0]
+		for column, cell := range table.Rows[rowIndex].Cells {
+			if keep[column] {
+				cells = append(cells, cell)
+			}
+		}
+		table.Rows[rowIndex].Cells = cells
+	}
 }

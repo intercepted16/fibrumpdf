@@ -126,7 +126,7 @@ func TestExtractLists(t *testing.T) {
 }
 
 func TestExtractTables(t *testing.T) {
-	pages := extractTestPDF(t, "sample.pdf")
+	pages := extractTestPDF(t, "sample_with_table.pdf")
 
 	var tables []models.Block
 	for _, p := range pages {
@@ -137,20 +137,20 @@ func TestExtractTables(t *testing.T) {
 		}
 	}
 
-	if len(tables) == 0 {
-		t.Error("no tables detected")
+	if got, want := len(tables), 2; got != want {
+		t.Fatalf("found %d tables, want %d", got, want)
 	}
-
-	for _, tbl := range tables {
-		if tbl.RowCount < 2 {
-			t.Errorf("table has too few rows: %d", tbl.RowCount)
+	wantShape := [][2]int{{5, 4}, {4, 3}}
+	for i, table := range tables {
+		if got := [2]int{table.RowCount, table.ColCount}; got != wantShape[i] {
+			t.Errorf("table %d shape = %v, want %v", i, got, wantShape[i])
 		}
-		if tbl.ColCount < 2 {
-			t.Errorf("table has too few cols: %d", tbl.ColCount)
-		}
-		if len(tbl.Rows) == 0 {
-			t.Error("table has no row data")
-		}
+	}
+	if got := tables[0].Rows[0].Cells[2].Spans[0].Text; got != "Price" {
+		t.Errorf("price heading = %q", got)
+	}
+	if got := tables[1].Rows[3].Cells[2].Spans[0].Text; got != "Representative" {
+		t.Errorf("role = %q", got)
 	}
 	t.Logf("found %d tables", len(tables))
 }

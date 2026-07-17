@@ -1,256 +1,168 @@
 package table
 
 import (
-	"math"
 	"slices"
 	"sort"
 
 	"github.com/fibrumpdf/go/internal/geometry"
 )
 
-// AssemblyConfig contains configuration for table assembly.
-type AssemblyConfig struct {
-	MinSplitGapRatio float32
-	RowGapMultiplier float32
-	MaxSplitGapRatio float32
-}
-
-// NewDefaultTableAssemblyConfig returns the default assembly configuration.
-func NewDefaultTableAssemblyConfig() AssemblyConfig {
-	return AssemblyConfig{
-		MinSplitGapRatio: 0.03,
-		RowGapMultiplier: 2.4,
-		MaxSplitGapRatio: splitGapRatio,
-	}
-}
-
-// RowGrouper builds rows from detected cells.
-type RowGrouper interface {
-	GroupRows(cells []geometry.Rect, pageRect geometry.Rect) []Row
-}
-
-// Segmenter splits rows into tables.
-type Segmenter interface {
-	Segment(rows []Row, pageRect geometry.Rect) []Table
-}
-
-// Assembler provides unified table assembly logic.
-type Assembler struct {
-	cfg        AssemblyConfig
-	rowGrouper RowGrouper
-	segmenter  Segmenter
-}
-
-// NewAssembler creates a new table assembler.
-func NewAssembler(cfg AssemblyConfig, rowGrouper RowGrouper, segmenter Segmenter) *Assembler {
-	return &Assembler{cfg: cfg, rowGrouper: rowGrouper, segmenter: segmenter}
-}
-
-// NewDefaultTableAssembler creates a default table assembler.
-func NewDefaultTableAssembler(cfg AssemblyConfig) *Assembler {
-	return NewAssembler(cfg, RowGrouperDefault{}, RowGapSegmenter{cfg: cfg})
-}
-
-// AssembleFromCells assembles tables from detected cells.
-func (ta *Assembler) AssembleFromCells(cells []geometry.Rect, pageRect geometry.Rect) *TableArray {
+func assembleCells(cells []geometry.Rect, pageRect geometry.Rect) *TableArray {
 	if len(cells) < 2 {
 		return nil
 	}
-	rows := ta.rowGrouper.GroupRows(cells, pageRect)
-	return ta.AssembleFromRows(rows, pageRect)
+	return assembleRows(groupRows(cells, pageRect), pageRect)
 }
 
-// AssembleFromRows assembles tables from pre-grouped rows.
-func (ta *Assembler) AssembleFromRows(rows []Row, pageRect geometry.Rect) *TableArray {
-	rows = filterEmptyRows(rows)
+func assembleRows(rows []Row, pageRect geometry.Rect) *TableArray {
+	rows = nonEmptyRows(rows)
 	if len(rows) < 2 {
 		return nil
 	}
-	tables := ta.segmenter.Segment(rows, pageRect)
+	tables := segmentRows(rows, pageRect)
 	if len(tables) == 0 {
 		return nil
 	}
 	return &TableArray{Tables: tables}
 }
 
-// RowGrouperDefault groups cell rectangles into rows.
-type RowGrouperDefault struct{}
-
-// GroupRows groups cells into rows using a tolerance derived from average height.
-func (RowGrouperDefault) GroupRows(cells []geometry.Rect, pageRect geometry.Rect) []Row {
-	var avgH float32
-	for _, c := range cells {
-		avgH += c.Height()
+func groupRows(cells []geometry.Rect, pageRect geometry.Rect) []Row {
+	avgHeight := float32(0)
+	for _, cell := range cells {
+		avgHeight += cell.Height()
 	}
-	avgH /= float32(len(cells))
-	rowGroupTol := adaptiveRowGroupingTolerance(avgH, pageRect)
+	avgHeight /= float32(len(cells))
+	groupTolerance := adaptiveRowGroupingTolerance(avgHeight, pageRect)
 
-	rowHeights := make(map[float32][]geometry.Rect)
-	rowTol := avgH * 0.3
-	for _, c := range cells {
-		foundKey := float32(-1)
-		for key := range rowHeights {
-			if geometry.Abs32(c.Y0-key) < rowTol {
-				foundKey = key
+	byY := make(map[float32][]geometry.Rect)
+	for _, cell := range cells {
+		matchedY := float32(-1)
+		for y := range byY {
+			if geometry.Abs32(cell.Y0-y) < avgHeight*0.3 {
+				matchedY = y
 				break
 			}
 		}
-		if foundKey >= 0 {
-			rowHeights[foundKey] = append(rowHeights[foundKey], c)
+		if matchedY >= 0 {
+			byY[matchedY] = append(byY[matchedY], cell)
 		} else {
-			rowHeights[c.Y0] = []geometry.Rect{c}
+			byY[cell.Y0] = []geometry.Rect{cell}
 		}
 	}
 
-	var rowYPositions []float32
-	for y := range rowHeights {
-		rowYPositions = append(rowYPositions, y)
+	yPositions := make([]float32, 0, len(byY))
+	for y := range byY {
+		yPositions = append(yPositions, y)
 	}
-	slices.Sort(rowYPositions)
+	slices.Sort(yPositions)
 
-	var heights []float32
-	for _, y := range rowYPositions {
-		if len(rowHeights[y]) > 0 {
-			h := rowHeights[y][0].Height()
-			for _, c := range rowHeights[y][1:] {
-				h = geometry.Max32(h, c.Height())
-			}
-			heights = append(heights, h)
+	rowHeights := make([]float32, 0, len(yPositions))
+	for _, y := range yPositions {
+		height := float32(0)
+		for _, cell := range byY[y] {
+			height = geometry.Max32(height, cell.Height())
 		}
+		rowHeights = append(rowHeights, height)
 	}
-	if len(heights) >= 2 {
-		var sumH float32
-		for _, h := range heights {
-			sumH += h
+	if len(rowHeights) >= 2 {
+		average := float32(0)
+		for _, height := range rowHeights {
+			average += height
 		}
-		avgRowH := sumH / float32(len(heights))
-		var filteredCells []geometry.Rect
-		for _, y := range rowYPositions {
-			rowCells := rowHeights[y]
-			var rowH float32
-			for _, c := range rowCells {
-				rowH = geometry.Max32(rowH, c.Height())
-			}
-			if avgRowH > 0 && rowH > 0 {
-				ratio := rowH / avgRowH
-				if ratio < 2.5 && ratio > 0.4 {
-					filteredCells = append(filteredCells, rowCells...)
-				} else {
-					Logger.Debug("filtered row by height consistency", "rowH", rowH, "avgRowH", avgRowH, "ratio", ratio)
-				}
-			} else {
-				filteredCells = append(filteredCells, rowCells...)
+		average /= float32(len(rowHeights))
+		filtered := make([]geometry.Rect, 0, len(cells))
+		for i, y := range yPositions {
+			ratio := rowHeights[i] / average
+			if average == 0 || rowHeights[i] == 0 || (ratio > 0.4 && ratio < 2.5) {
+				filtered = append(filtered, byY[y]...)
 			}
 		}
-		if len(filteredCells) < len(cells)*3/4 {
-			cells = filteredCells
+		if len(filtered) >= len(cells)*3/4 {
+			cells = filtered
 		}
 	}
 
-	sortTol := avgH * 0.2
+	sortTolerance := avgHeight * 0.2
 	sort.Slice(cells, func(i, j int) bool {
-		if dy := cells[i].Y0 - cells[j].Y0; geometry.Abs32(dy) > sortTol {
+		if dy := cells[i].Y0 - cells[j].Y0; geometry.Abs32(dy) > sortTolerance {
 			return dy < 0
 		}
 		return cells[i].X0 < cells[j].X0
 	})
-	var rows []Row
-	for i := 0; i < len(cells); {
-		rowY0, yTol := cells[i].Y0, rowGroupTol
-		j := i + 1
-		for j < len(cells) && math.Abs(float64(cells[j].Y0-rowY0)) <= float64(yTol) {
-			j++
+
+	rows := make([]Row, 0, len(yPositions))
+	for start := 0; start < len(cells); {
+		end := start + 1
+		for end < len(cells) && geometry.Abs32(cells[end].Y0-cells[start].Y0) <= groupTolerance {
+			end++
 		}
-		rowCells := make([]Cell, j-i)
-		for k := 0; k < j-i; k++ {
-			rowCells[k].BBox = cells[i+k]
+		rowCells := make([]Cell, end-start)
+		for i, rect := range cells[start:end] {
+			rowCells[i].BBox = rect
 		}
-		sort.Slice(rowCells, func(k1, k2 int) bool { return rowCells[k1].BBox.X0 < rowCells[k2].BBox.X0 })
+		sort.Slice(rowCells, func(i, j int) bool { return rowCells[i].BBox.X0 < rowCells[j].BBox.X0 })
 		row := Row{Cells: rowCells, BBox: rowCells[0].BBox}
-		for k := 1; k < len(rowCells); k++ {
-			row.BBox = row.BBox.Union(rowCells[k].BBox)
+		for _, cell := range rowCells[1:] {
+			row.BBox = row.BBox.Union(cell.BBox)
 		}
 		rows = append(rows, row)
-		i = j
+		start = end
 	}
 	return rows
 }
 
-// RowGapSegmenter segments rows into tables based on vertical gaps.
-type RowGapSegmenter struct {
-	cfg AssemblyConfig
-}
-
-// Segment splits rows into tables using gap thresholds and structural separators.
-func (s RowGapSegmenter) Segment(rows []Row, pageRect geometry.Rect) []Table {
-	splitGap := computeSplitGap(rows, pageRect, s.cfg)
-	var tables []Table
-	var cur Table
-	for i := 0; i < len(rows); i++ {
-		row := rows[i]
-		if len(cur.Rows) > 0 {
-			gap := row.BBox.Y0 - cur.Rows[len(cur.Rows)-1].BBox.Y1
-			if gap > splitGap {
-				if len(cur.Rows) >= 2 && !shouldRejectFullPageTable(cur, pageRect) {
-					tables = append(tables, cur)
-				}
-				cur = Table{}
-			}
-		}
-		cur.Rows = append(cur.Rows, row)
-		cur.BBox = cur.BBox.Union(row.BBox)
-	}
-	if len(cur.Rows) >= 2 && !shouldRejectFullPageTable(cur, pageRect) {
-		tables = append(tables, cur)
-	}
-	if len(tables) == 0 {
-		return nil
-	}
-	var segmented []Table
-	for _, tbl := range tables {
-		parts := splitTableOnSparseRowRuns(tbl, pageRect)
-		segmented = append(segmented, parts...)
-	}
-	return segmented
-}
-
-func filterEmptyRows(rows []Row) []Row {
-	filtered := rows[:0]
-	for _, row := range rows {
-		if len(row.Cells) == 0 || row.BBox.IsEmpty() {
+func segmentRows(rows []Row, pageRect geometry.Rect) []Table {
+	splitGap := rowSplitGap(rows, pageRect)
+	tables := make([]Table, 0, 2)
+	start := 0
+	for i := 1; i <= len(rows); i++ {
+		atEnd := i == len(rows)
+		if !atEnd && rows[i].BBox.Y0-rows[i-1].BBox.Y1 <= splitGap {
 			continue
 		}
-		filtered = append(filtered, row)
+		if i-start >= 2 {
+			table := Table{Rows: rows[start:i]}
+			for _, row := range table.Rows {
+				table.BBox = table.BBox.Union(row.BBox)
+			}
+			if !isFullPageTable(table, pageRect) {
+				tables = append(tables, splitTableOnSparseRowRuns(table, pageRect)...)
+			}
+		}
+		start = i
 	}
-	return filtered
+	return tables
 }
 
-func computeSplitGap(rows []Row, pageRect geometry.Rect, cfg AssemblyConfig) float32 {
-	var sumH float32
+func nonEmptyRows(rows []Row) []Row {
+	out := rows[:0]
+	for _, row := range rows {
+		if len(row.Cells) > 0 && !row.BBox.IsEmpty() {
+			out = append(out, row)
+		}
+	}
+	return out
+}
+
+func rowSplitGap(rows []Row, pageRect geometry.Rect) float32 {
+	totalHeight := float32(0)
 	count := 0
 	for _, row := range rows {
-		h := row.BBox.Height()
-		if h > 0 {
-			sumH += h
+		if height := row.BBox.Height(); height > 0 {
+			totalHeight += height
 			count++
 		}
 	}
-	avgH := float32(0)
+	averageHeight := float32(0)
 	if count > 0 {
-		avgH = sumH / float32(count)
+		averageHeight = totalHeight / float32(count)
 	}
-	splitGap := geometry.Max32(pageRect.Height()*cfg.MinSplitGapRatio, avgH*cfg.RowGapMultiplier)
-	maxGap := pageRect.Height() * cfg.MaxSplitGapRatio
-	if splitGap > maxGap {
-		splitGap = maxGap
-	}
-	return splitGap
+	return geometry.Min32(
+		geometry.Max32(pageRect.Height()*0.03, averageHeight*2.4),
+		pageRect.Height()*splitGapRatio,
+	)
 }
 
-func shouldRejectFullPageTable(tbl Table, pageRect geometry.Rect) bool {
-	if pageRect.Height() <= 0 {
-		return false
-	}
-	tableHeight := tbl.BBox.Height()
-	return tableHeight/pageRect.Height() > 0.9 && len(tbl.Rows) > 10
+func isFullPageTable(table Table, pageRect geometry.Rect) bool {
+	return pageRect.Height() > 0 && table.BBox.Height()/pageRect.Height() > 0.9 && len(table.Rows) > 10
 }

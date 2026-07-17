@@ -8,7 +8,7 @@ import (
 const (
 	snapTolRatio    = 0.015
 	joinTolRatio    = 0.005
-	minCellRatio    = 0.002  // Reduced from 0.003 to allow smaller cells
+	minCellRatio    = 0.002 // Reduced from 0.003 to allow smaller cells
 	maxCellWRatio   = 0.95
 	maxCellHRatio   = 0.50
 	splitGapRatio   = 0.10
