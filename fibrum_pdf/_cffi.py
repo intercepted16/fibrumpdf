@@ -95,6 +95,11 @@ def load_library(path: Path) -> ctypes.CDLL:
         lib = ctypes.CDLL(str(path))
         lib.pdf_to_json.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
         lib.pdf_to_json.restype = ctypes.c_int
+        if hasattr(lib, "pdf_to_json_with_error"):
+            lib.pdf_to_json_with_error.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
+            lib.pdf_to_json_with_error.restype = ctypes.c_void_p
+            lib.free_string.argtypes = [ctypes.c_void_p]
+            lib.free_string.restype = None
         return lib
     except OSError as e:
         log.error("load failed: %s", e)

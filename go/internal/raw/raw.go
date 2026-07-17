@@ -12,14 +12,21 @@ import "C"
 import (
 	"errors"
 	"path/filepath"
+	"sync"
 	"unsafe"
 
 	"github.com/fibrumpdf/go/internal/logger"
 )
 
 var Logger = logger.GetLogger("raw")
+var extractMu sync.Mutex
 
 func ExtractAllPagesRaw(pdfPath string) (string, error) {
+	// MuPDF and the shared C font cache are process-global. Keep document-level
+	// extraction serialized while allowing the Go post-processing stage to run
+	// concurrently across calls.
+	extractMu.Lock()
+	defer extractMu.Unlock()
 	pdfPath = filepath.ToSlash(pdfPath)
 	Logger.Debug("extracting all pages", "pdfPath", pdfPath)
 	cpath := C.CString(pdfPath)

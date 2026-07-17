@@ -20,6 +20,8 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+    "pytest",
+    "pyright",
     "ruff",
     "typer",
     "build",

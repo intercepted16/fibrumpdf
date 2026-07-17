@@ -7,6 +7,7 @@ import logging
 import os
 import sys
 import tempfile
+import threading
 from contextlib import contextmanager
 from functools import cached_property, lru_cache
 from pathlib import Path
@@ -16,28 +17,7 @@ if TYPE_CHECKING:
     from .models import Page, Pages
 
 log = logging.getLogger(__name__)
-_capture_file: str | None = None
-
-
-def _native_log_tail() -> str:
-    path = Path(tempfile.gettempdir()) / "fibrum-pdf.log"
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace").strip()
-    except OSError:
-        return ""
-    if not text:
-        return ""
-    lines = text.splitlines()
-    return "\n".join(lines[-40:])
-
-
-def _capture_path() -> str:
-    global _capture_file
-    if _capture_file is None:
-        fd, path = tempfile.mkstemp(prefix="fibrum_pdf_capture_", suffix=".log")
-        os.close(fd)
-        _capture_file = path
-    return _capture_file
+_legacy_capture_lock = threading.Lock()
 
 
 class ExtractionError(Exception):
@@ -45,22 +25,42 @@ class ExtractionError(Exception):
 
 
 @contextmanager
-def _redirect_c_output() -> Iterator[str]:
-    capture = _capture_path()
-    saved = os.dup(1), os.dup(2)
-    try:
-        fd = os.open(capture, os.O_WRONLY | os.O_TRUNC)
-        os.dup2(fd, 1)
-        os.dup2(fd, 2)
-        os.close(fd)
-        yield capture
-    finally:
-        sys.stdout.flush()
-        sys.stderr.flush()
-        os.dup2(saved[0], 1)
-        os.dup2(saved[1], 2)
-        os.close(saved[0])
-        os.close(saved[1])
+def _redirect_legacy_c_output() -> Iterator[int]:
+    """Capture output from native libraries predating direct error returns."""
+    with _legacy_capture_lock, tempfile.TemporaryFile() as capture:
+        saved = os.dup(1), os.dup(2)
+        try:
+            os.dup2(capture.fileno(), 1)
+            os.dup2(capture.fileno(), 2)
+            yield capture.fileno()
+        finally:
+            sys.stdout.flush()
+            sys.stderr.flush()
+            os.dup2(saved[0], 1)
+            os.dup2(saved[1], 2)
+            os.close(saved[0])
+            os.close(saved[1])
+
+
+def _extract(lib: Any, pdf: Path, output: Path) -> str | None:
+    pdf_bytes, output_bytes = os.fsencode(pdf), os.fsencode(output)
+    if hasattr(lib, "pdf_to_json_with_error"):
+        import ctypes
+
+        error = lib.pdf_to_json_with_error(pdf_bytes, output_bytes)
+        if not error:
+            return None
+        try:
+            return ctypes.string_at(error).decode(errors="replace")
+        finally:
+            lib.free_string(error)
+
+    with _redirect_legacy_c_output() as capture_fd:
+        rc = lib.pdf_to_json(pdf_bytes, output_bytes)
+        if rc == 0:
+            return None
+        os.lseek(capture_fd, 0, os.SEEK_SET)
+        return os.read(capture_fd, 1 << 20).decode(errors="replace").strip() or None
 
 
 @lru_cache(maxsize=1)
@@ -77,9 +77,10 @@ def _lib(path: Path | None = None):
 
 
 class ConversionResult:
-    """lazy pdf conversion result."""
+    """Lazy PDF conversion result backed by the generated JSON file."""
 
     def __init__(self, path: Path):
+        """Reference an extraction result at ``path``."""
         self.path = path
         log.debug("result at %s", path)
 
@@ -110,6 +111,7 @@ class ConversionResult:
         return pages
 
     def __iter__(self) -> Iterator["Page"]:
+        """Stream parsed pages without loading the entire document."""
         import ijson
         from .models import Page
 
@@ -119,6 +121,7 @@ class ConversionResult:
                 yield Page(p["data"])
 
     def __repr__(self) -> str:
+        """Return a concise representation containing the output path."""
         return f"ConversionResult({self.path})"
 
 
@@ -134,23 +137,8 @@ def to_json(
     out = Path(output).resolve() if output else pdf.with_suffix(".json")
     out.parent.mkdir(parents=True, exist_ok=True)
     log.info("extracting %s -> %s", pdf, out)
-    with _redirect_c_output() as cap:
-        rc = _lib(lib_path).pdf_to_json(str(pdf).encode(), str(out).encode())
-    if rc != 0:
-        details = []
-        try:
-            with open(cap) as f:
-                msg = f.read().strip()
-                if msg:
-                    log.error("c output:\n%s", msg)
-                    details.append(msg)
-        except OSError:
-            pass
-        if native_log := _native_log_tail():
-            log.error("native log:\n%s", native_log)
-            details.append(native_log)
-        suffix = f"\n{chr(10).join(details)}" if details else ""
-        raise ExtractionError(f"extraction failed (code {rc}){suffix}")
+    if error := _extract(_lib(lib_path), pdf, out):
+        raise ExtractionError(f"extraction failed: {error}")
     log.info("done")
     return ConversionResult(out)
 

@@ -43,7 +43,18 @@ func pdf_to_json(pdf_path *C.char, output_file *C.char) C.int {
 	if err == nil {
 		return 0
 	}
+	Logger.Error("conversion failed", "err", err)
 	return -1
+}
+
+//export pdf_to_json_with_error
+func pdf_to_json_with_error(pdf_path *C.char, output_file *C.char) *C.char {
+	err := pdfToJson(C.GoString(pdf_path), C.GoString(output_file))
+	if err == nil {
+		return nil
+	}
+	Logger.Error("conversion failed", "err", err)
+	return C.CString(err.Error())
 }
 
 func readRawPageData(pageFile string) (*rawdata.PageData, error) {
