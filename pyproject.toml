@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=45", "wheel"]
+requires = ["setuptools>=70.1"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -55,9 +55,9 @@ fibrum-pdf = "fibrum_pdf.main:main"
 [tool.cibuildwheel]
 skip = ["*-musllinux*", "*i686*", "*aarch64*"]
 build = [
-    "cp3{11,12,13,14}-manylinux_x86_64",
-    "cp3{11,12,13,14}-macosx_arm64",
-    "cp3{11,12,13,14}-win_amd64"
+    "cp311-manylinux_x86_64",
+    "cp311-macosx_arm64",
+    "cp311-win_amd64"
 ]
 
 
