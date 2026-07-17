@@ -29,11 +29,13 @@
 #define EDGE_DUP_TOL 0.35
 #define MAX_DUP_CHECK 48
 
-typedef struct
-{
-    fz_device super;
-    fz_buffer* edges_buf;
-} edge_device;
+#ifdef _WIN32
+#define THREAD_LOCAL __declspec(thread)
+#else
+#define THREAD_LOCAL _Thread_local
+#endif
+
+static THREAD_LOCAL fz_buffer* active_edges_buf;
 
 typedef struct
 {
@@ -149,26 +151,22 @@ static void add_edge(fz_context* ctx, fz_buffer* buf, double x0, double y0, doub
 static void edge_fill_path(fz_context* ctx, fz_device* dev, const fz_path* path, int even_odd, fz_matrix ctm,
                            fz_colorspace* cs, const float* color, float alpha, fz_color_params cp)
 {
-    edge_device* edge_dev = (edge_device*)dev;
-
     fz_rect bbox = fz_bound_path(ctx, path, NULL, ctm);
     double width = bbox.x1 - bbox.x0;
     double height = bbox.y1 - bbox.y0;
 
     if (width > 0 && height > 0)
     {
-        add_edge(ctx, edge_dev->edges_buf, bbox.x0, bbox.y0, bbox.x1, bbox.y0, 'h');
-        add_edge(ctx, edge_dev->edges_buf, bbox.x0, bbox.y1, bbox.x1, bbox.y1, 'h');
-        add_edge(ctx, edge_dev->edges_buf, bbox.x0, bbox.y0, bbox.x0, bbox.y1, 'v');
-        add_edge(ctx, edge_dev->edges_buf, bbox.x1, bbox.y0, bbox.x1, bbox.y1, 'v');
+        add_edge(ctx, active_edges_buf, bbox.x0, bbox.y0, bbox.x1, bbox.y0, 'h');
+        add_edge(ctx, active_edges_buf, bbox.x0, bbox.y1, bbox.x1, bbox.y1, 'h');
+        add_edge(ctx, active_edges_buf, bbox.x0, bbox.y0, bbox.x0, bbox.y1, 'v');
+        add_edge(ctx, active_edges_buf, bbox.x1, bbox.y0, bbox.x1, bbox.y1, 'v');
     }
 }
 
 static void edge_stroke_path(fz_context* ctx, fz_device* dev, const fz_path* path, const fz_stroke_state* stroke,
                              fz_matrix ctm, fz_colorspace* cs, const float* color, float alpha, fz_color_params cp)
 {
-    edge_device* edge_dev = (edge_device*)dev;
-
     if (!stroke || stroke->linewidth <= EDGE_MAX_WIDTH)
     {
         fz_rect bbox = fz_bound_path(ctx, path, stroke, ctm);
@@ -176,9 +174,9 @@ static void edge_stroke_path(fz_context* ctx, fz_device* dev, const fz_path* pat
         double height = bbox.y1 - bbox.y0;
 
         if (height <= EDGE_MAX_WIDTH && width >= EDGE_MIN_LENGTH)
-            add_edge(ctx, edge_dev->edges_buf, bbox.x0, bbox.y0, bbox.x1, bbox.y0, 'h');
+            add_edge(ctx, active_edges_buf, bbox.x0, bbox.y0, bbox.x1, bbox.y0, 'h');
         else if (width <= EDGE_MAX_WIDTH && height >= EDGE_MIN_LENGTH)
-            add_edge(ctx, edge_dev->edges_buf, bbox.x0, bbox.y0, bbox.x0, bbox.y1, 'v');
+            add_edge(ctx, active_edges_buf, bbox.x0, bbox.y0, bbox.x0, bbox.y1, 'v');
     }
 }
 
@@ -479,7 +477,6 @@ static int extract_page_to_file(fz_context* ctx, fz_document* doc, int page_num,
     int status = 0;
     fz_buffer* edges_buf = NULL;
     fz_buffer* output_buf = NULL;
-    fz_device* edge_capture_dev = NULL;
     fz_device* stext_dev = NULL;
 
     fz_try(ctx)
@@ -493,23 +490,20 @@ static int extract_page_to_file(fz_context* ctx, fz_document* doc, int page_num,
         fz_stext_options opts = (fz_stext_options){0};
         opts.flags = FZ_STEXT_PRESERVE_WHITESPACE | FZ_STEXT_ACCURATE_BBOXES;
         stext = fz_new_stext_page(ctx, bounds);
+        edges_buf = fz_new_buffer(ctx, 256 * 1024);
 
         stext_dev = fz_new_stext_device(ctx, stext, &opts);
 
-        fz_run_page(ctx, page, stext_dev, fz_identity, NULL);
+        active_edges_buf = edges_buf;
+        stext_dev->fill_path = edge_fill_path;
+        stext_dev->stroke_path = edge_stroke_path;
+        fz_run_page_contents(ctx, page, stext_dev, fz_identity, NULL);
+        stext_dev->fill_path = NULL;
+        stext_dev->stroke_path = NULL;
+        active_edges_buf = NULL;
+        fz_run_page_annots(ctx, page, stext_dev, fz_identity, NULL);
+        fz_run_page_widgets(ctx, page, stext_dev, fz_identity, NULL);
         fz_close_device(ctx, stext_dev);
-
-        edges_buf = fz_new_buffer(ctx, 256 * 1024);
-
-        edge_device* edge_dev = fz_new_derived_device(ctx, edge_device);
-        edge_capture_dev = &edge_dev->super;
-        edge_dev->edges_buf = edges_buf;
-
-        edge_capture_dev->fill_path = edge_fill_path;
-        edge_capture_dev->stroke_path = edge_stroke_path;
-
-        fz_run_page_contents(ctx, page, edge_capture_dev, fz_identity, NULL);
-        fz_close_device(ctx, edge_capture_dev);
 
         out = fopen(output_path, "wb");
         if (!out)
@@ -582,8 +576,7 @@ static int extract_page_to_file(fz_context* ctx, fz_document* doc, int page_num,
     {
         if (out)
             fclose(out);
-        if (edge_capture_dev)
-            fz_drop_device(ctx, edge_capture_dev);
+        active_edges_buf = NULL;
         if (stext_dev)
             fz_drop_device(ctx, stext_dev);
         if (page_links)
