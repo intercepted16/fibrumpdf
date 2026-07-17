@@ -11,7 +11,8 @@ import threading
 from contextlib import contextmanager
 from functools import cached_property, lru_cache
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Iterator
+from collections.abc import Generator
+from typing import TYPE_CHECKING, Any, Iterator, cast
 
 if TYPE_CHECKING:
     from .models import Page, Pages
@@ -25,7 +26,7 @@ class ExtractionError(Exception):
 
 
 @contextmanager
-def _redirect_legacy_c_output() -> Iterator[int]:
+def _redirect_legacy_c_output() -> Generator[int]:
     """Capture output from native libraries predating direct error returns."""
     with _legacy_capture_lock, tempfile.TemporaryFile() as capture:
         saved = os.dup(1), os.dup(2)
@@ -86,8 +87,8 @@ class ConversionResult:
 
     def _load(self) -> list[Any]:
         with open(self.path, encoding="utf-8") as f:
-            data = json.load(f)
-            return data if isinstance(data, list) else []
+            data: object = json.load(f)
+            return cast(list[Any], data) if isinstance(data, list) else []
 
     @cached_property
     def markdown(self) -> str:

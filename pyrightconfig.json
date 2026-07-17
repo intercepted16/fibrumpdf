@@ -1,8 +1,9 @@
 {
-  "include": ["src"],
+  "include": ["fibrum_pdf"],
   "exclude": ["**/__pycache__", ".venv"],
   "venvPath": ".",
   "venv": ".venv",
+  "pythonVersion": "3.11",
   "typeCheckingMode": "strict",
   "reportMissingTypeStubs": "none",
   "reportOptionalOperand": "none",

@@ -26,16 +26,16 @@ class Span(BaseModel):
 
 class TableCell(BaseModel):
     bbox: list[float]
-    spans: list[Span] = Field(default_factory=list)
+    spans: list[Span] = Field(default_factory=lambda: list[Span]())
 
 
 class TableRow(BaseModel):
     bbox: list[float]
-    cells: list[TableCell] = Field(default_factory=list)
+    cells: list[TableCell] = Field(default_factory=lambda: list[TableCell]())
 
 
 class ListItem(BaseModel):
-    spans: list[Span] = Field(default_factory=list)
+    spans: list[Span] = Field(default_factory=lambda: list[Span]())
     list_type: str
     indent: int = 0
     prefix: str | bool = False
@@ -45,7 +45,7 @@ class Block(BaseModel):
     model_config = ConfigDict(extra="allow")
     type: str
     bbox: list[float]
-    spans: list[Span] = Field(default_factory=list)
+    spans: list[Span] = Field(default_factory=lambda: list[Span]())
     length: int = 0
     lines: int | None = None
     level: int | None = None

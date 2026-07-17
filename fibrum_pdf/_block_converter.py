@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any
+from typing import Any, cast
 
 log = logging.getLogger(__name__)
 
@@ -60,9 +60,10 @@ def _join_spans(spans: list[dict[str, Any]]) -> str:
 
 
 def _cell_text(cell: dict[str, Any]) -> str:
+    spans = cast(list[dict[str, Any]], cell.get("spans") or [])
     text = (
-        " ".join(s.get("text", "") for s in (cell.get("spans") or [])).strip()
-        if cell.get("spans")
+        " ".join(s.get("text", "") for s in spans).strip()
+        if spans
         else cell.get("text", "").strip()
     )
     return text.replace("|", "\\|").replace("\n", "<br>")
