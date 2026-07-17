@@ -46,14 +46,13 @@ type Edge struct {
 }
 
 type PageData struct {
-	PageNumber         int
-	PageBounds         Rect
-	Blocks             []Block
-	Lines              []Line
-	Chars              []Char
-	Edges              []Edge
-	Links              []Link
-	LineCharIndexCache [][]int
+	PageNumber int
+	PageBounds Rect
+	Blocks     []Block
+	Lines      []Line
+	Chars      []Char
+	Edges      []Edge
+	Links      []Link
 }
 
 func (p *PageData) PageRect() geometry.Rect {
@@ -67,26 +66,13 @@ func (p *PageData) LineCharIndices(line *Line, dst []int) []int {
 	if p == nil || line == nil || line.CharCount <= 0 {
 		return dst[:0]
 	}
-	if line.Index >= 0 && line.Index < len(p.LineCharIndexCache) {
-		indices := p.LineCharIndexCache[line.Index]
-		if len(indices) == 0 {
-			return dst[:0]
-		}
-		if cap(dst) < len(indices) {
-			dst = make([]int, len(indices))
-		} else {
-			dst = dst[:len(indices)]
-		}
-		copy(dst, indices)
-		return dst
-	}
 	if cap(dst) < line.CharCount {
-		dst = make([]int, 0, line.CharCount)
+		dst = make([]int, line.CharCount)
 	} else {
-		dst = dst[:0]
+		dst = dst[:line.CharCount]
 	}
-	for i := 0; i < line.CharCount; i++ {
-		dst = append(dst, line.CharStart+i)
+	for i := range dst {
+		dst[i] = line.CharStart + i
 	}
 	return dst
 }
@@ -134,18 +120,18 @@ func (p *PageData) Sanitize() {
 		return
 	}
 	if len(p.Lines) == 0 {
-		p.LineCharIndexCache = nil
 		return
 	}
-	lineCharIndices := make([][]int, len(p.Lines))
 	if len(p.Chars) == 0 {
-		p.LineCharIndexCache = lineCharIndices
+		for i := range p.Lines {
+			p.Lines[i].CharStart = 0
+			p.Lines[i].CharCount = 0
+		}
 		return
 	}
 	newChars := make([]Char, 0, len(p.Chars))
 	for li := range p.Lines {
 		line := &p.Lines[li]
-		line.Index = li
 		if line.CharCount <= 0 {
 			line.CharStart = len(newChars)
 			line.CharCount = 0
@@ -166,13 +152,11 @@ func (p *PageData) Sanitize() {
 			if ch.Codepoint == 0 || ch.Codepoint == 0xFEFF {
 				continue
 			}
-			lineCharIndices[li] = append(lineCharIndices[li], len(newChars))
 			newChars = append(newChars, ch)
 			line.CharCount++
 		}
 	}
 	p.Chars = newChars
-	p.LineCharIndexCache = lineCharIndices
 }
 
 func (p *PageData) ResolveCharURI(ch *Char) string {
@@ -237,7 +221,6 @@ type Block struct {
 type Line struct {
 	BBox                 Rect
 	CharStart, CharCount int
-	Index                int
 }
 
 type Char struct {

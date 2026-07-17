@@ -22,9 +22,8 @@ var Logger = logger.GetLogger("raw")
 var extractMu sync.Mutex
 
 func ExtractAllPagesRaw(pdfPath string) (string, error) {
-	// MuPDF and the shared C font cache are process-global. Keep document-level
-	// extraction serialized while allowing the Go post-processing stage to run
-	// concurrently across calls.
+	// MuPDF's native entry point is process-global. Serialize document extraction
+	// while allowing Go post-processing to run concurrently across calls.
 	extractMu.Lock()
 	defer extractMu.Unlock()
 	pdfPath = filepath.ToSlash(pdfPath)
@@ -79,7 +78,7 @@ func ReadRawPage(filepath string) (*PageData, error) {
 	if rawData.line_count > 0 {
 		cLines := (*[1 << 20]C.fline)(unsafe.Pointer(rawData.lines))[:rawData.line_count:rawData.line_count]
 		for i := range result.Lines {
-			result.Lines[i] = Line{BBox: Rect{float32(cLines[i].bbox_x0), float32(cLines[i].bbox_y0), float32(cLines[i].bbox_x1), float32(cLines[i].bbox_y1)}, CharStart: int(cLines[i].char_start), CharCount: int(cLines[i].char_count), Index: i}
+			result.Lines[i] = Line{BBox: Rect{float32(cLines[i].bbox_x0), float32(cLines[i].bbox_y0), float32(cLines[i].bbox_x1), float32(cLines[i].bbox_y1)}, CharStart: int(cLines[i].char_start), CharCount: int(cLines[i].char_count)}
 		}
 	}
 	if rawData.char_count > 0 {
