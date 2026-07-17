@@ -61,6 +61,7 @@ def copy_runtime_dependencies(target: Path) -> None:
 
 def build_native(target: Path) -> None:
     """Compile the Go bridge once and copy its runtime dependencies."""
+    target = target.resolve()
     target.mkdir(parents=True, exist_ok=True)
     output = target / library_name()
     subprocess.run(
@@ -69,6 +70,7 @@ def build_native(target: Path) -> None:
         env=build_environment(),
         check=True,
     )
+    output.with_suffix(".h").unlink(missing_ok=True)
     copy_runtime_dependencies(target)
 
 
@@ -105,7 +107,7 @@ class PlatformWheel(bdist_wheel_base):
 setup(
     name=PACKAGE,
     packages=[PACKAGE],
-    package_data={PACKAGE: ["lib/*.so", "lib/*.so.*", "lib/*.dylib", "lib/*.dll"]},
+    include_package_data=False,
     cmdclass={"build_py": BuildPy, "bdist_wheel": PlatformWheel},
     distclass=BinaryDistribution,
 )
