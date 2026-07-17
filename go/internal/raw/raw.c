@@ -3,7 +3,8 @@
 // (approx. 3x slower overall)
 // so, use one function that writes to disk instead, much less overhead.
 // this is mostly pre existing logic just written to be used via Go.
-// additionally, the raw 'binary' format is used for performance and less disk usage. json gets very taxing on thousands of chars.
+// additionally, the raw 'binary' format is used for performance and less disk usage. json gets very taxing on thousands
+// of chars.
 //
 #include "raw.h"
 #include <stdlib.h>
@@ -31,9 +32,8 @@
 typedef struct
 {
     fz_device super;
-    fz_device* stext_dev;  
     fz_buffer* edges_buf;
-} combined_device;
+} edge_device;
 
 typedef struct
 {
@@ -44,16 +44,19 @@ typedef struct
 #define FONT_CACHE_SIZE 256
 static font_cache_entry font_cache[FONT_CACHE_SIZE];
 
-static int contains_token_ci(const char* haystack, const char* needle) {
+static int contains_token_ci(const char* haystack, const char* needle)
+{
     if (!haystack || !needle || !needle[0])
         return 0;
     size_t hlen = strlen(haystack);
     size_t nlen = strlen(needle);
     if (nlen > hlen)
         return 0;
-    for (size_t i = 0; i <= hlen - nlen; i++) {
+    for (size_t i = 0; i <= hlen - nlen; i++)
+    {
         size_t j = 0;
-        while (j < nlen) {
+        while (j < nlen)
+        {
             unsigned char hc = (unsigned char)haystack[i + j];
             unsigned char nc = (unsigned char)needle[j];
             if (tolower(hc) != tolower(nc))
@@ -66,34 +69,42 @@ static int contains_token_ci(const char* haystack, const char* needle) {
     return 0;
 }
 
-static unsigned char infer_style_from_font_name(const char* name) {
+static unsigned char infer_style_from_font_name(const char* name)
+{
     if (!name || !name[0])
         return 0;
 
     unsigned char flags = 0;
-    if (contains_token_ci(name, "bold") || contains_token_ci(name, "black") ||
-        contains_token_ci(name, "heavy") || contains_token_ci(name, "semibold") ||
-        contains_token_ci(name, "demi")) {
+    if (contains_token_ci(name, "bold") || contains_token_ci(name, "black") || contains_token_ci(name, "heavy") ||
+        contains_token_ci(name, "semibold") || contains_token_ci(name, "demi"))
+    {
         flags |= 1;
     }
-    if (contains_token_ci(name, "italic") || contains_token_ci(name, "oblique") ||
-        contains_token_ci(name, "kursiv") || contains_token_ci(name, "slanted")) {
+    if (contains_token_ci(name, "italic") || contains_token_ci(name, "oblique") || contains_token_ci(name, "kursiv") ||
+        contains_token_ci(name, "slanted"))
+    {
         flags |= 2;
     }
     return flags;
 }
 
-static unsigned char compute_font_flags(fz_context* ctx, fz_font* f) {
+static unsigned char compute_font_flags(fz_context* ctx, fz_font* f)
+{
     unsigned char flags = 0;
     if (!f)
         return flags;
 
     fz_font_flags_t* ff = fz_font_flags(f);
-    if (fz_font_is_bold(ctx, f)) flags |= 1;
-    if (fz_font_is_italic(ctx, f)) flags |= 2;
-    if (fz_font_is_monospaced(ctx, f)) flags |= 4;
-    if (ff && ff->fake_bold) flags |= 1;
-    if (ff && ff->fake_italic) flags |= 2;
+    if (fz_font_is_bold(ctx, f))
+        flags |= 1;
+    if (fz_font_is_italic(ctx, f))
+        flags |= 2;
+    if (fz_font_is_monospaced(ctx, f))
+        flags |= 4;
+    if (ff && ff->fake_bold)
+        flags |= 1;
+    if (ff && ff->fake_italic)
+        flags |= 2;
     flags |= infer_style_from_font_name(fz_font_name(ctx, f));
     return flags;
 }
@@ -109,19 +120,22 @@ static unsigned char get_font_flags(fz_context* ctx, fz_font* f)
         return 0;
     size_t slot = ((uintptr_t)f >> 4) & (FONT_CACHE_SIZE - 1);
     font_cache_entry* entry = &font_cache[slot];
-    if (entry->font != f) {
+    if (entry->font != f)
+    {
         entry->font = f;
         entry->flags = compute_font_flags(ctx, f);
     }
     return entry->flags;
 }
 
-static void mupdf_warning_callback(void* user, const char* message) {
+static void mupdf_warning_callback(void* user, const char* message)
+{
     (void)user;
     (void)message;
 }
 
-static void mupdf_error_callback(void* user, const char* message) {
+static void mupdf_error_callback(void* user, const char* message)
+{
     (void)user;
     (void)message;
 }
@@ -132,10 +146,10 @@ static void add_edge(fz_context* ctx, fz_buffer* buf, double x0, double y0, doub
     fz_append_data(ctx, buf, &e, sizeof(edge));
 }
 
-static void combined_fill_path(fz_context* ctx, fz_device* dev, const fz_path* path, int even_odd, fz_matrix ctm,
-                               fz_colorspace* cs, const float* color, float alpha, fz_color_params cp)
+static void edge_fill_path(fz_context* ctx, fz_device* dev, const fz_path* path, int even_odd, fz_matrix ctm,
+                           fz_colorspace* cs, const float* color, float alpha, fz_color_params cp)
 {
-    combined_device* cdev = (combined_device*)dev;
+    edge_device* edge_dev = (edge_device*)dev;
 
     fz_rect bbox = fz_bound_path(ctx, path, NULL, ctm);
     double width = bbox.x1 - bbox.x0;
@@ -143,20 +157,17 @@ static void combined_fill_path(fz_context* ctx, fz_device* dev, const fz_path* p
 
     if (width > 0 && height > 0)
     {
-        add_edge(ctx, cdev->edges_buf, bbox.x0, bbox.y0, bbox.x1, bbox.y0, 'h');
-        add_edge(ctx, cdev->edges_buf, bbox.x0, bbox.y1, bbox.x1, bbox.y1, 'h');
-        add_edge(ctx, cdev->edges_buf, bbox.x0, bbox.y0, bbox.x0, bbox.y1, 'v');
-        add_edge(ctx, cdev->edges_buf, bbox.x1, bbox.y0, bbox.x1, bbox.y1, 'v');
+        add_edge(ctx, edge_dev->edges_buf, bbox.x0, bbox.y0, bbox.x1, bbox.y0, 'h');
+        add_edge(ctx, edge_dev->edges_buf, bbox.x0, bbox.y1, bbox.x1, bbox.y1, 'h');
+        add_edge(ctx, edge_dev->edges_buf, bbox.x0, bbox.y0, bbox.x0, bbox.y1, 'v');
+        add_edge(ctx, edge_dev->edges_buf, bbox.x1, bbox.y0, bbox.x1, bbox.y1, 'v');
     }
-
-    if (cdev->stext_dev && cdev->stext_dev->fill_path)
-        cdev->stext_dev->fill_path(ctx, cdev->stext_dev, path, even_odd, ctm, cs, color, alpha, cp);
 }
 
-static void combined_stroke_path(fz_context* ctx, fz_device* dev, const fz_path* path, const fz_stroke_state* stroke,
-                                 fz_matrix ctm, fz_colorspace* cs, const float* color, float alpha, fz_color_params cp)
+static void edge_stroke_path(fz_context* ctx, fz_device* dev, const fz_path* path, const fz_stroke_state* stroke,
+                             fz_matrix ctm, fz_colorspace* cs, const float* color, float alpha, fz_color_params cp)
 {
-    combined_device* cdev = (combined_device*)dev;
+    edge_device* edge_dev = (edge_device*)dev;
 
     if (!stroke || stroke->linewidth <= EDGE_MAX_WIDTH)
     {
@@ -165,59 +176,10 @@ static void combined_stroke_path(fz_context* ctx, fz_device* dev, const fz_path*
         double height = bbox.y1 - bbox.y0;
 
         if (height <= EDGE_MAX_WIDTH && width >= EDGE_MIN_LENGTH)
-            add_edge(ctx, cdev->edges_buf, bbox.x0, bbox.y0, bbox.x1, bbox.y0, 'h');
+            add_edge(ctx, edge_dev->edges_buf, bbox.x0, bbox.y0, bbox.x1, bbox.y0, 'h');
         else if (width <= EDGE_MAX_WIDTH && height >= EDGE_MIN_LENGTH)
-            add_edge(ctx, cdev->edges_buf, bbox.x0, bbox.y0, bbox.x0, bbox.y1, 'v');
+            add_edge(ctx, edge_dev->edges_buf, bbox.x0, bbox.y0, bbox.x0, bbox.y1, 'v');
     }
-
-    if (cdev->stext_dev && cdev->stext_dev->stroke_path)
-        cdev->stext_dev->stroke_path(ctx, cdev->stext_dev, path, stroke, ctm, cs, color, alpha, cp);
-}
-
-static void combined_fill_text(fz_context* ctx, fz_device* dev, const fz_text* text, fz_matrix ctm,
-                               fz_colorspace* cs, const float* color, float alpha, fz_color_params cp)
-{
-    combined_device* cdev = (combined_device*)dev;
-    if (cdev->stext_dev && cdev->stext_dev->fill_text)
-        cdev->stext_dev->fill_text(ctx, cdev->stext_dev, text, ctm, cs, color, alpha, cp);
-}
-
-static void combined_stroke_text(fz_context* ctx, fz_device* dev, const fz_text* text, const fz_stroke_state* stroke,
-                                 fz_matrix ctm, fz_colorspace* cs, const float* color, float alpha, fz_color_params cp)
-{
-    combined_device* cdev = (combined_device*)dev;
-    if (cdev->stext_dev && cdev->stext_dev->stroke_text)
-        cdev->stext_dev->stroke_text(ctx, cdev->stext_dev, text, stroke, ctm, cs, color, alpha, cp);
-}
-
-static void combined_clip_text(fz_context* ctx, fz_device* dev, const fz_text* text, fz_matrix ctm, fz_rect scissor)
-{
-    combined_device* cdev = (combined_device*)dev;
-    if (cdev->stext_dev && cdev->stext_dev->clip_text)
-        cdev->stext_dev->clip_text(ctx, cdev->stext_dev, text, ctm, scissor);
-}
-
-static void combined_clip_stroke_text(fz_context* ctx, fz_device* dev, const fz_text* text, const fz_stroke_state* stroke,
-                                      fz_matrix ctm, fz_rect scissor)
-{
-    combined_device* cdev = (combined_device*)dev;
-    if (cdev->stext_dev && cdev->stext_dev->clip_stroke_text)
-        cdev->stext_dev->clip_stroke_text(ctx, cdev->stext_dev, text, stroke, ctm, scissor);
-}
-
-
-static void combined_close_device(fz_context* ctx, fz_device* dev)
-{
-    combined_device* cdev = (combined_device*)dev;
-    if (cdev->stext_dev)
-        fz_close_device(ctx, cdev->stext_dev);
-}
-
-static void combined_drop_device(fz_context* ctx, fz_device* dev)
-{
-    combined_device* cdev = (combined_device*)dev;
-    if (cdev->stext_dev)
-        fz_drop_device(ctx, cdev->stext_dev);
 }
 
 static double edge_length(const edge* e)
@@ -247,29 +209,32 @@ static void filter_edges(fz_context* ctx, fz_buffer* buf)
 {
     if (!buf)
         return;
-    
+
     size_t data_len = 0;
     unsigned char* data = NULL;
     data_len = fz_buffer_storage(ctx, buf, &data);
     int old_count = (int)(data_len / sizeof(edge));
-    
+
     if (old_count <= 0)
         return;
-    
+
     edge* old = (edge*)data;
     edge* filtered = malloc(old_count * sizeof(edge));
     if (!filtered)
         return;
-    
+
     int keep = 0;
-    for (int i = 0; i < old_count; i++) {
+    for (int i = 0; i < old_count; i++)
+    {
         edge* current = &old[i];
         if (edge_length(current) < MIN_EDGE_LENGTH)
             continue;
         int dup = 0;
         int limit = MAX_DUP_CHECK;
-        for (int j = keep - 1; j >= 0 && limit > 0; j--, limit--) {
-            if (edges_similar(&filtered[j], current)) {
+        for (int j = keep - 1; j >= 0 && limit > 0; j--, limit--)
+        {
+            if (edges_similar(&filtered[j], current))
+            {
                 dup = 1;
                 break;
             }
@@ -278,7 +243,7 @@ static void filter_edges(fz_context* ctx, fz_buffer* buf)
             continue;
         filtered[keep++] = *current;
     }
-    
+
     fz_clear_buffer(ctx, buf);
     fz_append_data(ctx, buf, filtered, keep * sizeof(edge));
     free(filtered);
@@ -296,8 +261,10 @@ static int is_italic_shear_candidate(const fz_stext_char* ch)
 
     float left_h = ch->quad.ul.y - ch->quad.ll.y;
     float right_h = ch->quad.ur.y - ch->quad.lr.y;
-    if (left_h < 0) left_h = -left_h;
-    if (right_h < 0) right_h = -right_h;
+    if (left_h < 0)
+        left_h = -left_h;
+    if (right_h < 0)
+        right_h = -right_h;
     float h = (left_h + right_h) * 0.5f;
     if (h < 1e-3f)
         return 0;
@@ -309,13 +276,15 @@ static int is_italic_shear_candidate(const fz_stext_char* ch)
         return 0;
 
     float shear = (left_dx + right_dx) * 0.5f;
-    if (shear < 0) shear = -shear;
+    if (shear < 0)
+        shear = -shear;
 
     return shear >= 0.24f && shear <= 0.55f;
 }
 
 static void write_chars_from_block_list(fz_buffer* buf, fz_context* ctx, fz_stext_block* block, int* written,
-    fchar** line_buffer_ptr, size_t* line_buffer_capacity_ptr, uint8_t** italic_candidate_ptr, size_t* italic_capacity_ptr)
+                                        fchar** line_buffer_ptr, size_t* line_buffer_capacity_ptr,
+                                        uint8_t** italic_candidate_ptr, size_t* italic_capacity_ptr)
 {
     fchar* line_buffer = *line_buffer_ptr;
     size_t line_buffer_capacity = *line_buffer_capacity_ptr;
@@ -326,8 +295,8 @@ static void write_chars_from_block_list(fz_buffer* buf, fz_context* ctx, fz_stex
     {
         if (block->type == FZ_STEXT_BLOCK_STRUCT && block->u.s.down)
         {
-            write_chars_from_block_list(buf, ctx, block->u.s.down->first_block, written,
-                &line_buffer, &line_buffer_capacity, &italic_candidate, &italic_capacity);
+            write_chars_from_block_list(buf, ctx, block->u.s.down->first_block, written, &line_buffer,
+                                        &line_buffer_capacity, &italic_candidate, &italic_capacity);
             continue;
         }
         if (block->type != FZ_STEXT_BLOCK_TEXT)
@@ -386,7 +355,7 @@ static void write_chars_from_block_list(fz_buffer* buf, fz_context* ctx, fz_stex
             if (line_chars == 0)
                 continue;
 
-            for (int i = 0; i < line_chars; )
+            for (int i = 0; i < line_chars;)
             {
                 if (!italic_candidate[i])
                 {
@@ -429,23 +398,24 @@ static void write_all_char_data(fz_buffer* buf, fz_context* ctx, fz_stext_page* 
     uint8_t* italic_candidate = NULL;
     size_t italic_capacity = 0;
 
-    write_chars_from_block_list(buf, ctx, stext->first_block, &written,
-        &line_buffer, &line_buffer_capacity, &italic_candidate, &italic_capacity);
+    write_chars_from_block_list(buf, ctx, stext->first_block, &written, &line_buffer, &line_buffer_capacity,
+                                &italic_candidate, &italic_capacity);
 
     free(line_buffer);
     free(italic_candidate);
     (void)expected_total;
 }
 
-static void append_text_blocks_and_lines(fz_context* ctx, fz_stext_block* block, fz_buffer* blocks_buf, fz_buffer* lines_buf,
-    int* total_blocks, int* total_lines, int* total_chars, int* line_idx, int* char_idx)
+static void append_text_blocks_and_lines(fz_context* ctx, fz_stext_block* block, fz_buffer* blocks_buf,
+                                         fz_buffer* lines_buf, int* total_blocks, int* total_lines, int* total_chars,
+                                         int* line_idx, int* char_idx)
 {
     for (; block; block = block->next)
     {
         if (block->type == FZ_STEXT_BLOCK_STRUCT && block->u.s.down)
         {
-            append_text_blocks_and_lines(ctx, block->u.s.down->first_block, blocks_buf, lines_buf,
-                total_blocks, total_lines, total_chars, line_idx, char_idx);
+            append_text_blocks_and_lines(ctx, block->u.s.down->first_block, blocks_buf, lines_buf, total_blocks,
+                                         total_lines, total_chars, line_idx, char_idx);
             continue;
         }
         fblock rb = {0};
@@ -492,7 +462,8 @@ static void append_text_blocks_and_lines(fz_context* ctx, fz_stext_block* block,
     }
 }
 
-static int count_links(fz_link* links) {
+static int count_links(fz_link* links)
+{
     int count = 0;
     for (fz_link* l = links; l; l = l->next)
         count++;
@@ -508,7 +479,7 @@ static int extract_page_to_file(fz_context* ctx, fz_document* doc, int page_num,
     int status = 0;
     fz_buffer* edges_buf = NULL;
     fz_buffer* output_buf = NULL;
-    fz_device* combined_dev = NULL;
+    fz_device* edge_capture_dev = NULL;
     fz_device* stext_dev = NULL;
 
     fz_try(ctx)
@@ -530,22 +501,15 @@ static int extract_page_to_file(fz_context* ctx, fz_document* doc, int page_num,
 
         edges_buf = fz_new_buffer(ctx, 256 * 1024);
 
-        combined_device* cdev = fz_new_derived_device(ctx, combined_device);
-        combined_dev = &cdev->super;
-        cdev->stext_dev = NULL;
-        cdev->edges_buf = edges_buf;
+        edge_device* edge_dev = fz_new_derived_device(ctx, edge_device);
+        edge_capture_dev = &edge_dev->super;
+        edge_dev->edges_buf = edges_buf;
 
-        combined_dev->close_device = combined_close_device;
-        combined_dev->drop_device = combined_drop_device;
-        combined_dev->fill_path = combined_fill_path;
-        combined_dev->stroke_path = combined_stroke_path;
-        combined_dev->fill_text = combined_fill_text;
-        combined_dev->stroke_text = combined_stroke_text;
-        combined_dev->clip_text = combined_clip_text;
-        combined_dev->clip_stroke_text = combined_clip_stroke_text;
+        edge_capture_dev->fill_path = edge_fill_path;
+        edge_capture_dev->stroke_path = edge_stroke_path;
 
-        fz_run_page_contents(ctx, page, combined_dev, fz_identity, NULL);
-        fz_close_device(ctx, combined_dev);
+        fz_run_page_contents(ctx, page, edge_capture_dev, fz_identity, NULL);
+        fz_close_device(ctx, edge_capture_dev);
 
         out = fopen(output_path, "wb");
         if (!out)
@@ -563,18 +527,18 @@ static int extract_page_to_file(fz_context* ctx, fz_document* doc, int page_num,
         int line_idx = 0;
         int char_idx = 0;
 
-        append_text_blocks_and_lines(ctx, stext->first_block, blocks_buf, lines_buf,
-            &total_blocks, &total_lines, &total_chars, &line_idx, &char_idx);
+        append_text_blocks_and_lines(ctx, stext->first_block, blocks_buf, lines_buf, &total_blocks, &total_lines,
+                                     &total_chars, &line_idx, &char_idx);
 
         int page_number = page_num + 1;
         filter_edges(ctx, edges_buf);
-        
+
         fz_append_data(ctx, output_buf, &page_number, sizeof(int));
         fz_append_data(ctx, output_buf, &bounds, sizeof(fz_rect));
         fz_append_data(ctx, output_buf, &total_blocks, sizeof(int));
         fz_append_data(ctx, output_buf, &total_lines, sizeof(int));
         fz_append_data(ctx, output_buf, &total_chars, sizeof(int));
-        
+
         unsigned char* edges_data = NULL;
         size_t edges_len = fz_buffer_storage(ctx, edges_buf, &edges_data);
         int edges_count = (int)(edges_len / sizeof(edge));
@@ -584,7 +548,7 @@ static int extract_page_to_file(fz_context* ctx, fz_document* doc, int page_num,
         unsigned char* blocks_data = NULL;
         size_t blocks_len = fz_buffer_storage(ctx, blocks_buf, &blocks_data);
         fz_append_data(ctx, output_buf, blocks_data, blocks_len);
-        
+
         unsigned char* lines_data = NULL;
         size_t lines_len = fz_buffer_storage(ctx, lines_buf, &lines_data);
         fz_append_data(ctx, output_buf, lines_data, lines_len);
@@ -593,7 +557,8 @@ static int extract_page_to_file(fz_context* ctx, fz_document* doc, int page_num,
 
         fz_append_data(ctx, output_buf, edges_data, edges_len);
 
-        for (fz_link* l = page_links; l; l = l->next) {
+        for (fz_link* l = page_links; l; l = l->next)
+        {
             fz_append_data(ctx, output_buf, &l->rect, sizeof(fz_rect));
             const char* uri = l->uri ? l->uri : "";
             int uri_len = strlen(uri);
@@ -612,14 +577,13 @@ static int extract_page_to_file(fz_context* ctx, fz_document* doc, int page_num,
 
         fclose(out);
         out = NULL;
-
     }
     fz_always(ctx)
     {
         if (out)
             fclose(out);
-        if (combined_dev)
-            fz_drop_device(ctx, combined_dev);
+        if (edge_capture_dev)
+            fz_drop_device(ctx, edge_capture_dev);
         if (stext_dev)
             fz_drop_device(ctx, stext_dev);
         if (page_links)
@@ -650,7 +614,8 @@ char* extract_all_pages(const char* pdf_path)
         return NULL;
 
     char* temp_dir = malloc(256);
-    if (!temp_dir) {
+    if (!temp_dir)
+    {
         fprintf(stderr, "fibrum_pdf: failed to allocate temp dir buffer\n");
         return NULL;
     }
@@ -658,7 +623,8 @@ char* extract_all_pages(const char* pdf_path)
 #ifdef _WIN32
     char base_dir[MAX_PATH];
     DWORD base_len = GetTempPathA((DWORD)sizeof(base_dir), base_dir);
-    if (base_len == 0 || base_len >= sizeof(base_dir)) {
+    if (base_len == 0 || base_len >= sizeof(base_dir))
+    {
         fprintf(stderr, "fibrum_pdf: GetTempPathA failed: %lu\n", GetLastError());
         free(temp_dir);
         return NULL;
@@ -667,14 +633,16 @@ char* extract_all_pages(const char* pdf_path)
 #else
     snprintf(temp_dir, 256, "/tmp/fibrum_pdf_%ld_%u_XXXXXX", (long)time(NULL), (unsigned)getpid());
 #endif
-    if (!mkdtemp(temp_dir)) {
+    if (!mkdtemp(temp_dir))
+    {
         fprintf(stderr, "fibrum_pdf: failed to create temp dir '%s': %s\n", temp_dir, strerror(errno));
         free(temp_dir);
         return NULL;
     }
 
     fz_context* ctx = fz_new_context(NULL, NULL, FZ_STORE_SIZE);
-    if (!ctx) {
+    if (!ctx)
+    {
         fprintf(stderr, "fibrum_pdf: failed to create MuPDF context\n");
         free(temp_dir);
         return NULL;
@@ -698,7 +666,8 @@ char* extract_all_pages(const char* pdf_path)
         error = 1;
     }
 
-    if (error || page_count == 0) {
+    if (error || page_count == 0)
+    {
         if (doc)
             fz_drop_document(ctx, doc);
         fz_drop_context(ctx);
@@ -729,8 +698,10 @@ char* extract_all_pages(const char* pdf_path)
         num_workers = 1;
 
     clear_font_cache();
-    if (num_workers == 1) {
-        for (int p = 0; p < page_count; p++) {
+    if (num_workers == 1)
+    {
+        for (int p = 0; p < page_count; p++)
+        {
             char filename[512];
             snprintf(filename, sizeof(filename), "%s/page_%03d.raw", temp_dir, p + 1);
             if (extract_page_to_file(ctx, doc, p, filename) != 0)
@@ -753,20 +724,24 @@ char* extract_all_pages(const char* pdf_path)
     fz_drop_context(ctx);
 
     pid_t* pids = calloc(num_workers, sizeof(pid_t));
-    if (!pids) {
+    if (!pids)
+    {
         free(temp_dir);
         return NULL;
     }
     int created = 0;
 
-    for (int i = 0; i < num_workers; i++) {
+    for (int i = 0; i < num_workers; i++)
+    {
         int start = i;
         pid_t pid = fork();
-        if (pid < 0) {
+        if (pid < 0)
+        {
             perror("fork");
             continue;
         }
-        if (pid == 0) {
+        if (pid == 0)
+        {
             /* CHILD: open its own context/document and process pages in round-robin */
             fz_context* child_ctx = fz_new_context(NULL, NULL, FZ_STORE_SIZE);
             if (!child_ctx)
@@ -775,18 +750,21 @@ char* extract_all_pages(const char* pdf_path)
             fz_set_error_callback(child_ctx, mupdf_error_callback, NULL);
 
             fz_document* child_doc = NULL;
-            fz_try(child_ctx) {
+            fz_try(child_ctx)
+            {
                 fz_register_document_handlers(child_ctx);
                 child_doc = fz_open_document(child_ctx, pdf_path);
             }
-            fz_catch(child_ctx) {
+            fz_catch(child_ctx)
+            {
                 if (child_doc)
                     fz_drop_document(child_ctx, child_doc);
                 fz_drop_context(child_ctx);
                 _exit(1);
             }
 
-            for (int p = start; p < page_count; p += num_workers) {
+            for (int p = start; p < page_count; p += num_workers)
+            {
                 char filename[512];
                 snprintf(filename, sizeof(filename), "%s/page_%03d.raw", temp_dir, p + 1);
                 if (extract_page_to_file(child_ctx, child_doc, p, filename) != 0)
@@ -801,7 +779,8 @@ char* extract_all_pages(const char* pdf_path)
         pids[created++] = pid;
     }
 
-    for (int i = 0; i < created; i++) {
+    for (int i = 0; i < created; i++)
+    {
         int wstatus;
         waitpid(pids[i], &wstatus, 0);
     }
@@ -845,10 +824,8 @@ int read_page(const char* filepath, page_data* out)
     out->edges = out->edge_count > 0 ? malloc(out->edge_count * sizeof(edge)) : NULL;
     out->links = out->link_count > 0 ? malloc(out->link_count * sizeof(flink)) : NULL;
 
-    if ((out->block_count > 0 && !out->blocks) ||
-        (out->line_count > 0 && !out->lines) ||
-        (out->char_count > 0 && !out->chars) ||
-        (out->edge_count > 0 && !out->edges) ||
+    if ((out->block_count > 0 && !out->blocks) || (out->line_count > 0 && !out->lines) ||
+        (out->char_count > 0 && !out->chars) || (out->edge_count > 0 && !out->edges) ||
         (out->link_count > 0 && !out->links))
     {
         free_page(out);
