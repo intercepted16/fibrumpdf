@@ -491,7 +491,7 @@ static int extract_page_to_file(fz_context* ctx, fz_document* doc, int page_num,
         int link_count = count_links(page_links);
 
         fz_stext_options opts = (fz_stext_options){0};
-        opts.flags = FZ_STEXT_PRESERVE_WHITESPACE | FZ_STEXT_ACCURATE_BBOXES | FZ_STEXT_COLLECT_STYLES;
+        opts.flags = FZ_STEXT_PRESERVE_WHITESPACE | FZ_STEXT_ACCURATE_BBOXES;
         stext = fz_new_stext_page(ctx, bounds);
 
         stext_dev = fz_new_stext_device(ctx, stext, &opts);
