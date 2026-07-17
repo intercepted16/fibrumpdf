@@ -1,6 +1,6 @@
 # FibrumPDF
 
-**Structured PDF extraction at 162 pages per second on CPU.**
+**Structured PDF extraction at 179 pages per second on CPU.**
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776ab)](https://pypi.org/project/fibrum-pdf/)
 [![CI](https://github.com/intercepted16/fibrumpdf/actions/workflows/ci.yml/badge.svg)](https://github.com/intercepted16/fibrumpdf/actions/workflows/ci.yml)
@@ -20,12 +20,12 @@ seconds per page is not acceptable.
 
 The repository benchmark contains 512 documents from the
 `datalab-to/marker_benchmark` dataset. On the documented Ryzen 7 4800H test
-system, the current FibrumPDF build processes **162.2 pages/s**—about **39×**
-PyMuPDF4LLM and **263×** Docling in this benchmark.
+system, the current FibrumPDF build processes **179.2 pages/s**—about **43×**
+PyMuPDF4LLM and **291×** Docling in this benchmark.
 
 | Extractor | Pages/s | Text score | Table TEDS | Table precision | Table recall |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| **FibrumPDF** | **162.22** | 84.75 | 0.754 | 0.535 | 0.436 |
+| **FibrumPDF** | **179.21** | 84.75 | 0.754 | 0.535 | 0.436 |
 | PyMuPDF4LLM | 4.15 | 86.54 | 0.778 | 0.647 | 0.554 |
 | Docling | 0.62 | 91.13 | 0.821 | 0.796 | 0.738 |
 
