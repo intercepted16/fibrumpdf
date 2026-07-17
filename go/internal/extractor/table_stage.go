@@ -12,15 +12,13 @@ func extractTables(ctx parseOutput, blocks []layoutBlock) ([]layoutBlock, []mode
 		return blocks, nil
 	}
 	Logger.Debug("extracted tables", "count", len(tableBlocks))
-	tables := make([]models.Block, len(tableBlocks))
-	copy(tables, tableBlocks)
 	filtered := blocks[:0]
 	for _, b := range blocks {
-		if !overlapsTable(b.bbox, tables) {
+		if !overlapsTable(b.bbox, tableBlocks) {
 			filtered = append(filtered, b)
 		}
 	}
-	return filtered, tables
+	return filtered, tableBlocks
 }
 
 func overlapsTable(bbox models.BBox, tables []models.Block) bool {
