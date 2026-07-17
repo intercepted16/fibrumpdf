@@ -3,12 +3,20 @@
 from __future__ import annotations
 
 import logging
+from enum import Enum
 from pathlib import Path
 from typing import Annotated, Optional
 
 import typer
 
-from .api import ExtractionError, to_json
+from .api import ExtractionError, to_json, to_markdown
+
+
+class OutputFormat(str, Enum):
+    """Supported CLI output formats."""
+
+    json = "json"
+    markdown = "markdown"
 
 
 def run(
@@ -24,22 +32,31 @@ def run(
     ],
     output: Annotated[
         Optional[Path],
-        typer.Argument(help="Output JSON path (defaults to pdf_path.json)"),
+        typer.Argument(
+            help="Output path (defaults to the input name with a new suffix)"
+        ),
     ] = None,
+    output_format: Annotated[
+        OutputFormat,
+        typer.Option("--format", "-f", help="Output format"),
+    ] = OutputFormat.json,
     verbose: Annotated[
         bool, typer.Option("--verbose", "-v", help="Enable verbose logging")
     ] = False,
 ) -> None:
-    """Extract PDF content to JSON."""
+    """Extract structured PDF content to JSON or Markdown."""
     logging.basicConfig(
         level=logging.DEBUG if verbose else logging.INFO,
         format="%(levelname)s: %(message)s",
         force=True,
     )
     try:
-        result = to_json(pdf_path, output)
-        logging.getLogger(__name__).info("wrote %s", result.path)
-    except (FileNotFoundError, ExtractionError) as e:
+        if output_format is OutputFormat.markdown:
+            path = to_markdown(pdf_path, output)
+        else:
+            path = to_json(pdf_path, output).path
+        logging.getLogger(__name__).info("wrote %s", path)
+    except (FileNotFoundError, ValueError, ExtractionError) as e:
         typer.secho(f"Error: {e}", fg=typer.colors.RED, err=True)
         raise typer.Exit(1) from e
 

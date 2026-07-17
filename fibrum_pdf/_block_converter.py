@@ -11,7 +11,13 @@ log = logging.getLogger(__name__)
 BULLETS = frozenset("•‣⁃⁌⁍∙▪▫●○◦■□▶▸◆◇♦➤\uf0b7\ufffd")
 FMT_MARKERS = ("**", "*", "`", "~~")
 PUNCT = " \n\t.,;:)]/\\-?!"
-STYLES = [("bold", "**"), ("italic", "*"), ("strikeout", "~~"), ("subscript", "~")]
+STYLES = [
+    ("bold", "**"),
+    ("italic", "*"),
+    ("monospace", "`"),
+    ("strikeout", "~~"),
+    ("subscript", "~"),
+]
 
 
 def _style_span(span: dict[str, Any]) -> str:
@@ -106,14 +112,22 @@ def _list(block: dict[str, Any], text: str) -> str:
     )
 
 
-def _heading(block: dict[str, Any], text: str) -> str:
+def _plain_text(block: dict[str, Any]) -> str:
+    return (block.get("text") or "").strip() or "".join(
+        str(span.get("text", "")) for span in block.get("spans", [])
+    ).strip()
+
+
+def _heading(block: dict[str, Any]) -> str:
     level = max(1, min(int(block.get("level") or 1), 6))
-    if level >= 4:
-        plain = (block.get("text") or "").strip() or "".join(
-            str(span.get("text", "")) for span in block.get("spans", [])
-        ).strip()
-        return f"**{plain or text}**\n"
-    return f"{'#' * level} **{text}**\n"
+    return f"{'#' * level} {_plain_text(block)}\n"
+
+
+def _code(block: dict[str, Any]) -> str:
+    text = _plain_text(block)
+    longest_run = max((len(run) for run in re.findall(r"`+", text)), default=0)
+    fence = "`" * max(3, longest_run + 1)
+    return f"{fence}\n{text}\n{fence}\n"
 
 
 def block_to_markdown(block: dict[str, Any]) -> str:
@@ -123,11 +137,11 @@ def block_to_markdown(block: dict[str, Any]) -> str:
         return ""
 
     if typ == "heading":
-        return _heading(block, text)
+        return _heading(block)
     if typ in ("paragraph", "text"):
         return f"{text}\n"
     if typ == "code":
-        return f"{text}\n"
+        return _code(block)
     if typ == "table":
         return _table(block.get("rows", []))
     if typ == "list":

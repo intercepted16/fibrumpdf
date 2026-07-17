@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import ctypes
+import json
 import os
 from pathlib import Path
 
 import pytest
 
-from fibrum_pdf.api import _extract, to_json
+from fibrum_pdf.api import ConversionResult, _extract, to_json
 
 
 class ModernLibrary:
@@ -62,3 +63,39 @@ def test_to_json_refuses_to_overwrite_input(tmp_path: Path) -> None:
         to_json(pdf, pdf)
 
     assert pdf.read_bytes() == b"%PDF-placeholder"
+
+
+def test_conversion_result_streams_markdown_to_file(tmp_path: Path) -> None:
+    source = tmp_path / "document.json"
+    source.write_text(
+        json.dumps(
+            [
+                {
+                    "data": [
+                        {
+                            "type": "heading",
+                            "bbox": [0, 0, 100, 20],
+                            "level": 1,
+                            "spans": [{"text": "First", "font_size": 14}],
+                        }
+                    ]
+                },
+                {
+                    "data": [
+                        {
+                            "type": "paragraph",
+                            "bbox": [0, 0, 100, 20],
+                            "spans": [{"text": "Second", "font_size": 10}],
+                        }
+                    ]
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+    output = tmp_path / "nested" / "document.md"
+
+    written = ConversionResult(source).write_markdown(output)
+
+    assert written == output.resolve()
+    assert output.read_text(encoding="utf-8") == "# First\n\n---\n\nSecond\n"

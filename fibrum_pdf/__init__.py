@@ -7,7 +7,7 @@ from importlib import metadata
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from .api import ConversionResult, ExtractionError, to_json
+    from .api import ConversionResult, ExtractionError, to_json, to_markdown
     from .models import Block, ListItem, Page, Pages, Span, TableCell, TableRow
 
 __all__ = [
@@ -20,6 +20,7 @@ __all__ = [
     "TableRow",
     "ExtractionError",
     "to_json",
+    "to_markdown",
     "ConversionResult",
     "__version__",
 ]
@@ -27,10 +28,10 @@ logging.getLogger(__name__).addHandler(logging.NullHandler())
 
 
 def __getattr__(name: str) -> Any:
-    if name == "to_json":
-        from .api import to_json
+    if name in {"to_json", "to_markdown"}:
+        from . import api
 
-        return to_json
+        return getattr(api, name)
     if name == "ExtractionError":
         from .api import ExtractionError
 

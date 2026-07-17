@@ -91,17 +91,35 @@ class ConversionResult:
 
     @cached_property
     def markdown(self) -> str:
-        from ._block_converter import block_to_markdown
+        return "\n---\n\n".join(page.markdown for page in self if page.markdown)
 
-        markdowns = []
-        for page in self._load():
-            if isinstance(page, dict) and isinstance(page.get("data"), list):
-                page_md = "\n".join(
-                    m for m in [block_to_markdown(b) for b in page["data"]] if m
-                )
-                if page_md:
-                    markdowns.append(page_md)
-        return "\n---\n\n".join(markdowns)
+    def write_markdown(self, output: str | Path) -> Path:
+        """Stream Markdown to ``output`` and replace it atomically."""
+        target = Path(output).resolve()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temporary: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=target.parent,
+                prefix=f".{target.name}.",
+                delete=False,
+            ) as stream:
+                temporary = Path(stream.name)
+                first = True
+                for page in self:
+                    if not (markdown := page.markdown):
+                        continue
+                    if not first:
+                        stream.write("\n---\n\n")
+                    stream.write(markdown)
+                    first = False
+            temporary.replace(target)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+        return target
 
     def collect(self) -> "Pages":
         from .models import Page, Pages
@@ -115,7 +133,7 @@ class ConversionResult:
         import ijson
         from .models import Page
 
-        with open(self.path, encoding="utf-8") as f:
+        with open(self.path, "rb") as f:
             for i, p in enumerate(ijson.items(f, "item")):
                 log.debug("page %d", i + 1)
                 yield Page(p["data"])
@@ -145,4 +163,20 @@ def to_json(
     return ConversionResult(out)
 
 
-__all__ = ["ExtractionError", "to_json", "ConversionResult"]
+def to_markdown(
+    pdf_path: str | Path,
+    output: str | Path | None = None,
+    *,
+    lib_path: Path | None = None,
+) -> Path:
+    """Extract ``pdf_path`` to a Markdown file and return its path."""
+    pdf = Path(pdf_path).resolve()
+    target = Path(output).resolve() if output else pdf.with_suffix(".md")
+    if pdf == target:
+        raise ValueError("input and output must be different files")
+    with tempfile.TemporaryDirectory(prefix="fibrum-pdf-") as directory:
+        result = to_json(pdf, Path(directory) / "document.json", lib_path=lib_path)
+        return result.write_markdown(target)
+
+
+__all__ = ["ExtractionError", "to_json", "to_markdown", "ConversionResult"]
