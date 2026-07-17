@@ -214,7 +214,9 @@ def _run_tools(config: BenchmarkConfig, layout: ArtifactLayout, shards: list[Sha
 
 def _finish(config: BenchmarkConfig, layout: ArtifactLayout) -> Path:
     if layout.csv_path.exists():
-        dashboard(layout.csv_path, config.output, config.tools)
+        chart = dashboard(layout.csv_path, config.output, config.tools)
+        if chart is not None:
+            chart.save(config.output / "dashboard.svg")
     return layout.csv_path
 
 

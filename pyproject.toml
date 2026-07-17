@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "fibrum-pdf"
 version = "1.1.2"
-description = "A fast PDF extractor; a 200 pages/s alternative to Marker, Docling, PyMUPDF4LLM & others."
+description = "Fast, structured PDF extraction to JSON and Markdown."
 authors = [{ name = "Adit Bajaj" }]
 readme = "README.md"
 requires-python = ">=3.11"
@@ -23,7 +23,6 @@ dev = [
     "pytest",
     "pyright",
     "ruff",
-    "typer",
     "build",
 ]
 gui = ["streamlit"]
@@ -39,10 +38,8 @@ benchmark = [
     "pymupdf4llm",
     "python-Levenshtein",
     "rapidfuzz",
-    "rich",
     "scipy",
-    "typer",
-    "fibrum-pdf"
+    "vl-convert-python"
 ]
 
 [project.urls]

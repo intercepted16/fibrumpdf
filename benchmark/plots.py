@@ -87,6 +87,8 @@ def dashboard(
         return None
     summary_tools = set(summary["tool"].to_list())
     tools = [tool for tool in tools_order if tool in summary_tools]
+    tools.extend(tool for tool in COLORS if tool in summary_tools and tool not in tools)
+    tools.extend(sorted(summary_tools - set(tools)))
     table_df = (
         summary.filter(pl.col("tool").is_in(tools))
         .select(["tool", "table_precision", "table_recall"])
