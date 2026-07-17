@@ -1,4 +1,4 @@
-"""ctypes bindings and library loading."""
+"""ctypes bindings and native library discovery."""
 
 from __future__ import annotations
 
@@ -7,100 +7,76 @@ import logging
 import os
 import sys
 from functools import lru_cache
-from importlib import metadata
 from pathlib import Path
 
 log = logging.getLogger(__name__)
 _dll_directory_handles: list[object] = []
 
 
+def _library_name() -> str:
+    return {
+        "darwin": "libtomd.dylib",
+        "win32": "libtomd.dll",
+    }.get(sys.platform, "libtomd.so")
+
+
 @lru_cache(maxsize=1)
 def find_library() -> Path | None:
-    env = os.environ.get("FIBRUMPDF_LIB")
-    if env and (p := Path(env)).exists():
-        log.debug("library from env: %s", p)
-        return p.resolve()
+    """Find the bundled, locally built, or explicitly configured bridge."""
+    if configured := os.environ.get("FIBRUMPDF_LIB"):
+        path = Path(configured).expanduser()
+        if path.is_file():
+            return path.resolve()
 
-    pkg = Path(__file__).resolve().parent
-    proj, build = pkg.parent, pkg.parent / "build"
-    lib_name = {"darwin": "libtomd.dylib", "win32": "libtomd.dll"}.get(
-        sys.platform, "libtomd.so"
-    )
-
-    for d in [
-        pkg / "lib",
-        build / "lib" / "fibrum_pdf" / "lib",
-        proj / "lib",
-        proj / "lib" / "mupdf",
-        build,
-        build / "lib",
-    ]:
-        if d.exists():
-            for f in d.rglob(lib_name):
-                if f.is_file():
-                    log.debug("found library: %s", f)
-                    return f.resolve()
-
-    if build.exists():
-        for child in build.iterdir():
-            if child.is_dir() and child.name.startswith("lib"):
-                for f in (child / "fibrum_pdf" / "lib").rglob(lib_name):
-                    if f.is_file():
-                        return f.resolve()
-
-    try:
-        dist = metadata.distribution("fibrum-pdf")
-    except metadata.PackageNotFoundError:
-        dist = None
-
-    if dist is not None:
-        files = dist.files or []
-        for file in files:
-            if file.parts[-3:] == ("fibrum_pdf", "lib", lib_name):
-                f = Path(dist.locate_file(file))
-                if f.is_file():
-                    log.debug("found installed package library: %s", f)
-                    return f.resolve()
-
-    log.warning("libtomd not found")
+    package = Path(__file__).resolve().parent
+    project, name = package.parent, _library_name()
+    candidates = [package / "lib" / name, project / "lib" / name]
+    candidates.extend((project / "build").glob(f"lib*/fibrum_pdf/lib/{name}"))
+    for path in candidates:
+        if path.is_file():
+            log.debug("found native library: %s", path)
+            return path.resolve()
     return None
+
+
+def _prepare_dependencies(path: Path) -> None:
+    directories = (
+        path.parent,
+        Path(__file__).resolve().parent.parent / "lib" / "mupdf",
+    )
+    if sys.platform == "win32":
+        for directory in directories:
+            if directory.is_dir() and hasattr(os, "add_dll_directory"):
+                _dll_directory_handles.append(os.add_dll_directory(str(directory)))
+        return
+
+    pattern = "libmupdf*.dylib*" if sys.platform == "darwin" else "libmupdf.so*"
+    for directory in directories:
+        for dependency in sorted(directory.glob(pattern), reverse=True):
+            try:
+                ctypes.CDLL(str(dependency), mode=ctypes.RTLD_GLOBAL)
+                return
+            except OSError:
+                continue
+
+
+def _configure_abi(library: ctypes.CDLL) -> None:
+    library.pdf_to_json.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
+    library.pdf_to_json.restype = ctypes.c_int
+    if hasattr(library, "pdf_to_json_with_error"):
+        library.pdf_to_json_with_error.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
+        library.pdf_to_json_with_error.restype = ctypes.c_void_p
+        library.free_string.argtypes = [ctypes.c_void_p]
+        library.free_string.restype = None
 
 
 @lru_cache(maxsize=1)
 def load_library(path: Path) -> ctypes.CDLL:
-    log.debug("loading %s", path)
-    dependency_dirs = [
-        path.parent,
-        path.parent.parent.parent / "lib" / "mupdf",
-        Path(__file__).resolve().parent.parent / "lib" / "mupdf",
-    ]
-    if sys.platform == "win32":
-        for d in dependency_dirs:
-            if d.exists() and hasattr(os, "add_dll_directory"):
-                _dll_directory_handles.append(os.add_dll_directory(str(d)))
-            if d.exists():
-                os.environ["PATH"] = f"{d}{os.pathsep}{os.environ.get('PATH', '')}"
-    else:
-        for d in dependency_dirs:
-            if d.exists():
-                for mupdf in sorted(d.glob("libmupdf.so.*"), reverse=True) or list(
-                    d.glob("libmupdf.so")
-                ):
-                    try:
-                        ctypes.CDLL(str(mupdf), mode=ctypes.RTLD_GLOBAL)
-                        break
-                    except Exception:
-                        pass
+    """Load and configure the native bridge at ``path``."""
+    _prepare_dependencies(path)
     try:
-        lib = ctypes.CDLL(str(path))
-        lib.pdf_to_json.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
-        lib.pdf_to_json.restype = ctypes.c_int
-        if hasattr(lib, "pdf_to_json_with_error"):
-            lib.pdf_to_json_with_error.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
-            lib.pdf_to_json_with_error.restype = ctypes.c_void_p
-            lib.free_string.argtypes = [ctypes.c_void_p]
-            lib.free_string.restype = None
-        return lib
-    except OSError as e:
-        log.error("load failed: %s", e)
-        raise RuntimeError(f"failed to load libtomd: {e}") from e
+        library = ctypes.CDLL(str(path))
+    except OSError as error:
+        raise RuntimeError(f"failed to load libtomd: {error}") from error
+    _configure_abi(library)
+    return library
