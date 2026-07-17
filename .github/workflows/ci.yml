@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache-dependency-path: go/go.sum
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.11"
+          enable-cache: true
+
+      - name: Prepare MuPDF
+        run: |
+          git clone --filter=blob:none --sparse --depth 1 --branch 1.27.0 \
+            https://github.com/ArtifexSoftware/mupdf.git /tmp/mupdf
+          git -C /tmp/mupdf sparse-checkout set include
+          mkdir -p mupdf lib/mupdf
+          cp -R /tmp/mupdf/include mupdf/include
+          curl -fsSL \
+            https://github.com/intercepted16/mupdf-prebuilts/releases/download/mupdf-1.27.0/libmupdf.so.27.0 \
+            -o lib/mupdf/libmupdf.so.27.0
+          ln -s libmupdf.so.27.0 lib/mupdf/libmupdf.so
+
+      - name: Install development environment
+        run: uv sync --extra dev
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}/lib/mupdf
+
+      - name: Python quality
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+          uv run pytest -q
+
+      - name: Go quality
+        working-directory: go
+        run: |
+          go test ./...
+          go vet ./...
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}/lib/mupdf

@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
-"""AI generated script, just for me to quickly visualise the output in Markdown. Not safe for real usage."""
+"""Streamlit viewer for inspecting extracted Markdown page by page."""
 
 import sys
-import streamlit as st
 from time import perf_counter
+
+import streamlit as st
+
 from fibrum_pdf import to_json
 
 
-def main(input_pdf: str, output_file: str):
+def main(input_pdf: str, output_file: str) -> None:
     st.set_page_config(
         page_title="PDF Viewer", layout="wide", initial_sidebar_state="expanded"
     )
@@ -70,9 +72,7 @@ def main(input_pdf: str, output_file: str):
     content = load_page(st.session_state.current_idx)
 
     if content:
-        st.markdown(
-            content, unsafe_allow_html=True
-        )  # this is a one-off script, allow it.
+        st.markdown(content)
     else:
         st.info("No pages available yet")
 
@@ -82,8 +82,9 @@ if __name__ == "__main__":
     argv.pop(0)
 
     if len(argv) < 2:
-        print(f"Usage: `streamlit run {sys.argv[0]} -- <input_pdf> <output_file>`")
-        sys.exit(1)
+        raise SystemExit(
+            f"Usage: streamlit run {sys.argv[0]} -- <input_pdf> <output_file>"
+        )
 
     _in = argv[0]
     _out = argv[1]

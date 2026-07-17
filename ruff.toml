@@ -1,6 +1,6 @@
 line-length = 88
 include = ["*.py"]
-extend-exclude = ["mupdf/*.py"]
+extend-exclude = ["build", "dump", "mupdf"]
 
 [lint]
 select = ["E", "F", "W", "C", "D", "N", "T", "B"]
