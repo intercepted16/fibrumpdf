@@ -1,200 +1,195 @@
 # FibrumPDF
 
-Extract 200+ pages per second on CPU.
+**Structured PDF extraction at 162 pages per second on CPU.**
 
-A lot of PDF tooling is either:
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776ab)](https://pypi.org/project/fibrum-pdf/)
+[![CI](https://github.com/intercepted16/fibrumpdf/actions/workflows/ci.yml/badge.svg)](https://github.com/intercepted16/fibrumpdf/actions/workflows/ci.yml)
+[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-663399)](LICENSE)
 
-- high quality but slow, GPU-heavy, or expensive (Azure Document Intelligence, Docling)
-- or very fast but focused mostly on raw text extraction (pdfium)
+FibrumPDF turns digital PDFs into structured JSON or clean Markdown without a
+GPU, a model download, or a remote API. It preserves headings, paragraphs,
+lists, tables, reading order, bounding boxes, links, and inline formatting while
+keeping the extraction path native and aggressively parallel.
 
-This is basically an attempt to sit in the middle.
+It is built for ingestion pipelines where raw text is not enough, but waiting
+seconds per page is not acceptable.
 
-In other words, the goal is to keep useful structure, while pushing throughput much further than most structured extractors.
+![Benchmark dashboard](benchmark/results/dashboard.svg)
 
-It's not trying to beat ML-based systems on absolute extraction quality. Furthermore, you will notice it is behind on many cases.
+## The trade-off, measured
 
-It gives you tables, text, and their formatting, plus lower level information like bounding boxes and font sizes. They may help you in certain features for RAG.
+The repository benchmark contains 512 documents from the
+`datalab-to/marker_benchmark` dataset. On the documented Ryzen 7 4800H test
+system, the current FibrumPDF build processes **162.2 pages/s**—about **39×**
+PyMuPDF4LLM and **263×** Docling in this benchmark.
 
-It outputs JSON for programmatic use. But it allows for Markdown.
+| Extractor | Pages/s | Text score | Table TEDS | Table precision | Table recall |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| **FibrumPDF** | **162.22** | 84.75 | 0.754 | 0.535 | 0.436 |
+| PyMuPDF4LLM | 4.15 | 86.54 | 0.778 | 0.647 | 0.554 |
+| Docling | 0.62 | 91.13 | 0.821 | 0.796 | 0.738 |
 
-It is written for Python. It uses Go for performance and a bit of C to interface with MuPDF.
+That speed is a deliberate quality trade-off. ML-based extractors remain better
+for difficult tables and irregular layouts. FibrumPDF is compelling when a
+digital document has a conventional layout and throughput, local execution, and
+inspectable heuristics matter more than maximum recall.
 
-- 200×+ faster than Docling
-- 20x faster than Pymupdf4llm
-- About the same formatting quality,
-- With a drop in table recall and precision
+[Open the interactive report](benchmark/results/dashboard.html) or see
+[how the benchmark works](#reproduce-the-benchmark).
 
-![Speed](benchmark/results/speed.png)
-![Quality](benchmark/results/quality.png)
-**Full benchmark information** [here](#Benchmark-information)
+## What you get
 
----
+- Semantic blocks: headings, paragraphs, lists, code, figures, and tables.
+- Layout metadata: page numbers and block, row, cell, and span bounding boxes.
+- Inline formatting: bold, italic, monospace, strikeout, super/subscript, links.
+- Two consumption modes: collect small documents or stream large ones page by
+  page with bounded memory.
+- Atomic output: failed extraction never leaves a half-written destination.
+- Native wheels for Python 3.11+ on Linux x86_64, macOS arm64, and Windows x64.
 
-# Installation
+## Quick start
 
 ```bash
-pip install fibrum-pdf
+uv pip install fibrum-pdf
 ```
 
-> There are wheels for Python 3.9–3.14 (inclusive of minor versions) on macOS (ARM/x64) and all modern Linux distributions, and Windows x64.
-
-**To build from source**, see [BUILD.md](BUILD.md). 
-
----
-
-## What it's good at
-
-- Speed.
-- Custom logic.
-- No GPU needed.
-- Iterating on parsing logic without waiting hours.
-
-## What it's bad at
-
-- Scanned PDFs and images. It doesn't extract images, nor parse them
-- Complex layouts (think Forms, spreadsheet-style documents)
-- Lower precision and recall for tables compared to ML-based extractors
-- doesn't extract code blocks and it's (very) slightly behind on formatting
-
----
-# Usage
-
-### Basic
+Extract JSON:
 
 ```python
 from fibrum_pdf import to_json
 
-result = to_json("example.pdf", output="example.json")
-print(f"Extracted to: {result.path}")
-```
+result = to_json("report.pdf", "report.json")
+print(result.path)
 
-> You can omit the `output` field; it defaults to `<file>.json`
-
-### Collect all pages in memory
-
-```python
-result = to_json("report.pdf", output="report.json")
-pages = result.collect()
-
-# Access pages as objects with markdown conversion
-for page in pages:
+for page in result:  # streamed; the whole document is not loaded
     print(page.markdown)
-    
-# Access individual blocks
-for block in pages[0]:
-    print(f"Block type: {block.type}")
-    print(f"Has {len(block.spans)} spans")
 ```
 
-> This still saves it to `result.path`; it just allows you to load it into memory. If you don't want to write to disk at all, consider providing a special path.
-
-> This is only for smaller PDFs. For larger ones, this may result in crashes due to loading everything into RAM. See below for a solution.
-
-### stream pages (memory-efficient)
+Write Markdown directly. Pages are converted incrementally and the destination
+is replaced atomically:
 
 ```python
-result = to_json("large.pdf", output="large.json")
+from fibrum_pdf import to_markdown
 
-# Iterate one page at a time without loading everything
-for page in result:
-    for block in page:
-        print(f"Block type: {block.type}")
+path = to_markdown("report.pdf", "report.md")
 ```
 
-### Markdown
+For smaller documents, collect typed Pydantic-backed objects:
 
 ```python
-result = to_json("document.pdf", output="document.json")
-pages = result.collect()
+pages = to_json("report.pdf").collect()
 
-# Full document as markdown
-full_markdown = pages.markdown
-
-# Single page as markdown
-page_markdown = pages[0].markdown
-
-# Single block as markdown
-block_markdown = pages[0][0].markdown
+print(pages[0].markdown)
+print(pages[0][0].type, pages[0][0].bbox)
 ```
 
-### Command-line
+The CLI exposes both formats:
 
 ```bash
-python -m fibrum_pdf.main input.pdf [output_path]
+uv run fibrum-pdf report.pdf report.json
+uv run fibrum-pdf report.pdf report.md --format markdown
 ```
 
----
+The output path is optional; it defaults to the PDF name with a `.json` or `.md`
+suffix.
 
-## Output structure
+## Output model
 
-Each page is a JSON array of blocks. Every block has:
+The JSON document is an array of pages. Each page contains a `data` array of
+blocks:
 
-- `type`: block type (text, heading, paragraph, list, table, code)
-- `bbox`: [x0, y0, x1, y1] bounding box coordinates
-- `font_size`: font size in points (average for multi-span blocks)
-- `length`: character count
-- `spans`: array of styled text spans with style flags (bold, italic, mono-space, etc.)
+```json
+[
+  {
+    "page": 1,
+    "data": [
+      {
+        "type": "heading",
+        "level": 1,
+        "bbox": [178.64, 84.50, 433.36, 102.55],
+        "font_size": 24,
+        "spans": [
+          {"text": "Quarterly report", "font_size": 0, "bold": true}
+        ]
+      }
+    ]
+  }
+]
+```
 
-> Note that a span represents a logical group of styling. You'll find that most blocks only have one span.
+Tables add row and cell geometry; lists add typed items, markers, and indentation.
+See [the public models](fibrum_pdf/models.py) for the complete schema.
 
-### Span fields
-- `text`: span content
-- `font_size`: size in points
-- `bold`, `italic`, `monospace`, `strikeout`, `superscript`, `subscript`: boolean style flags
-- `link`: boolean indicating if span contains a hyperlink
-- `uri`: URI string if linked, otherwise false
+## How it works
 
-See [models.py](fibrum_pdf/models.py).
+```mermaid
+flowchart LR
+    A[Python API / CLI] --> B[Go shared library]
+    B --> C[MuPDF C extraction]
+    C --> D[Reading-order and text pipeline]
+    C --> E[Unified table pipeline]
+    D --> F[Atomic structured JSON]
+    E --> F
+    F --> G[Streaming pages]
+    F --> H[Typed models]
+    F --> I[Semantic Markdown]
+```
 
----
+MuPDF handles PDF interpretation. Go performs layout analysis, table detection,
+classification, cleanup, and bounded parallel page processing. Python stays a
+thin orchestration layer and exposes the native result lazily through `ijson`.
 
-# FAQ
+The native bridge serializes MuPDF access where its process-global state requires
+it, while document-level work uses a bounded worker and reorder window. This
+keeps memory proportional to active work rather than total page count.
 
-**why not XXX?**
-There are tools that are much better in quality. These are typically reliant on some sort of ML or OCR, making them slow and GPU-dependent. There are also tools that are extremely fast, but only give you raw text; which isn't helpful. Hopefully, this is fast and good enough.
+## Known limits
 
-**Will this handle my XXX PDF?**  
-It won't handle scanned documents, images or weird layouts and elements (think Forms in PDFs and spreadsheet-like documents).
+FibrumPDF does not run OCR and does not extract embedded images. It is therefore
+not the right tool for scanned PDFs. Forms, spreadsheets, heavily layered pages,
+and unconventional visual layouts can also defeat the heuristic extractor.
 
-**Commercial use?**  
-This project uses MuPDF, which is under the AGPL-v3 license, or optionally a paid license from Artifex Software.
+Use the benchmark as a starting point, then test representative documents from
+your own workload before committing to an extraction stack.
 
-**Motivations?**
-I got bored waiting for my documents to get chunked again.
+## Reproduce the benchmark
 
+Benchmark reports are generated by the code in [`benchmark/`](benchmark/). The
+committed comparison uses 512 deterministic samples (`--seed 0`, one timing run)
+on an AMD Ryzen 7 4800H; Docling used the machine's GTX 1650 Ti where applicable.
 
----
-# Benchmark information
+```bash
+uv sync --extra benchmark
+uv run python -m benchmark download \
+  --output benchmark/data --max-rows 512
+uv run python -m benchmark run \
+  --dataset-path benchmark/data \
+  --output benchmark/results \
+  --max-rows 512 --runs 1
+```
 
-The `datalab-to/marker-dataset` from Hugging Face is used. 
-Results are generated by `benchmark/`.
+Per-document measurements, aggregate rows, and generated reports are committed
+under [`benchmark/results/`](benchmark/results/). Throughput varies by hardware;
+the quality scores are the more portable comparison.
 
-**Test system:** AMD Ryzen 7 4800H (16 cores), GTX 1650 TI (for Docling)
+## Development
 
-You can review all the code and run it yourself via the Typer CLI, or also review the `benchmark/results/` directory.
+Source builds require MuPDF 1.27. See [BUILD.md](BUILD.md) for platform setup.
+Once the native dependency is available:
 
-![Benchmark results](benchmark/results/dashboard.svg)
+```bash
+uv sync --extra dev
+uv run ruff check .
+uv run ruff format --check .
+uv run pytest -q
 
----
+cd go
+go test ./...
+go vet ./...
+```
 
-# Optimization (how is it fast?)
-Most of the performance benefits are thanks to others' hard work :)
+## License
 
-- MuPDF is written in pure C, has many performance micro-optimizations, and is extremely high quality. This does all the hard PDF work, and so, this is a major reason.
-
-- Compared to `Docling` and `pymupdf4llm`, Fibrum avoids ML/AI and instead uses heuristics. This trades some accuracy for significantly better performance.
-
-- Go and C are compiled, and since the logic is CPU heavy, the difference compared to Python, for example, is major here.
-
-- MuPDF cannot be safely multithreaded with shared state, so parallelism is achieved with `fork`. Each process has its own memory space, allowing near-linear scaling with core count.
-
-- The parallelism is aggressive. We intentionally oversubscribe on goroutines to allow the CPU to be fully saturated, for example, when the CPU pauses for the GC or RAM, a goroutine is always available to take it's place for a bit if we use 2-3x more.
-
-- Instead of relying on CGO/FFI, intermediate data is written as raw buffers and read by Go using zero-copy-style views. This avoids repeated boundary crossings and large memory copies. The workload is CPU-bound, so disk I/O (largely handled by the OS page cache) is not the bottleneck.
-
-
-# Licensing
-This project uses MuPDF, which is under the AGPL-v3 license, or optionally a paid license from Artifex Software.
-
-See [LICENSE](LICENSE) for the detail.
-
+FibrumPDF is licensed under [AGPL-3.0](LICENSE). MuPDF is also AGPL-licensed and
+is available under a commercial license from Artifex. Confirm that those terms
+fit your distribution model before embedding FibrumPDF in a product.

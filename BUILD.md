@@ -1,94 +1,91 @@
-# Building
+# Building FibrumPDF from source
 
-This project depends on **MuPDF**. That's pretty much the only thing you've got to worry about.
+FibrumPDF compiles a Go shared library against **MuPDF 1.27** and packages both
+native runtimes inside a platform wheel. You need Go 1.24+, Python 3.11+, `uv`,
+the MuPDF headers, and a matching shared MuPDF library.
 
----
+Prebuilt wheels already contain these native components. Follow this guide only
+for local development or a platform without a published wheel.
 
-## 1. Obtain MuPDF Shared Library
+## 1. Get the headers
 
-You have two options:
-
-### Option A: Build from the submodule
-
-If you cloned the repository without recursive submodules:
+The repository pins MuPDF as a submodule:
 
 ```bash
 git submodule update --init --recursive
 ```
 
-Then navigate to the `mupdf` submodule and build the shared library:
+Only `mupdf/include/` is required to compile the bridge.
+
+## 2. Provide the MuPDF runtime
+
+Create `lib/mupdf/` and place the runtime for the build platform there:
+
+| Platform | Required files |
+| --- | --- |
+| Linux | `libmupdf.so.27.0` and a `libmupdf.so` symlink |
+| macOS | `libmupdf.dylib` |
+| Windows | `libmupdf.dll` and its runtime DLL dependencies |
+
+The project's
+[MuPDF prebuilt releases](https://github.com/intercepted16/mupdf-prebuilts/releases/tag/mupdf-1.27.0)
+contain the files used by CI. You can instead build MuPDF from the submodule:
 
 ```bash
 cd mupdf
 make shared=yes release=yes lib
 ```
 
-After building, copy the generated libraries into your project’s `lib/mupdf` directory:
+Copy the resulting shared library into `lib/mupdf/` before continuing. The
+library architecture must match the wheel architecture.
 
-```
-libmupdf.so
-libmupdf.so.27.0
-```
-or
-```
-libmupdf.dylib
-```
+## 3. Build and test
 
-or
-```
-libmupdf.dll
-```
-
----
-
-### Option B: Use precompiled shared libraries
-
-You can also download the precompiled MuPDF 1.27.0 shared libraries from the GitHub releases:
-
-**Linux (x86_64):**
-* [libmupdf.so](https://github.com/intercepted16/mupdf-prebuilts/releases/download/mupdf-1.27.0/libmupdf.so)
-* [libmupdf.so.27.0](https://github.com/intercepted16/mupdf-prebuilts/releases/download/mupdf-1.27.0/libmupdf.so.27.0)
-
-**macOS (Universal):**
-* [libmupdf.dylib](https://github.com/intercepted16/mupdf-prebuilts/releases/download/mupdf-1.27.0/libmupdf.dylib)
-
-**Windows:**
-* Not provided.
-
-> **Note:** These precompiled libraries are automatically built by [MuPDF prebuilts](https://github.com/intercepted16/mupdf-prebuilts) and published to [GitHub Releases](https://github.com/intercepted16/mupdf-prebuilts/releases). They are used automatically by `cibuildwheel` when building Python wheels.
-
----
-
-## 2. Use the Go CLI
-
-In `go/cmd/tomd/main.go`, there is a basic cli, that can be used via:
+On Linux, expose the runtime while installing and running:
 
 ```bash
-go run cmd/tomd <pdf_path> [output_json]
+export LD_LIBRARY_PATH="$PWD/lib/mupdf${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+uv sync --extra dev
+uv build
+uv run pytest -q
+
+cd go
+go test ./...
+go vet ./...
 ```
 
-Make sure to set `LD_LIBRARY_PATH` correctly when running to include `lib/mupdf`, as seen in `.zshenter`
+Use `DYLD_LIBRARY_PATH` on macOS. On Windows, ensure `lib/mupdf` is on `PATH`
+while building.
 
-You could also manually build the Go shared library if you want to use that in any other language.
-I won't go into detail here, however.
+`uv build` invokes `setup.py`, which compiles `go/cmd/tojson` with
+`-buildmode=c-shared`, copies the MuPDF runtime beside it, and creates one
+Python-ABI-independent wheel for the current platform.
 
----
+## Native-only development
 
-## 3. Python Installation
-
-Once `libmupdf.so` and `libmupdf.so.27.0` is in `lib/mupdf`, install the Python package:
+To rebuild the bridge without creating a wheel:
 
 ```bash
-pip install .
+cd go
+go build -buildmode=c-shared -o /tmp/libtomd.so ./cmd/tojson
 ```
 
-> This can be prefixed with anything, for example, I like to use `uv`.
+Point Python at that build for a local smoke test:
 
-* `setup.py` automatically links against the shared libraries.
+```bash
+FIBRUMPDF_LIB=/tmp/libtomd.so \
+  uv run fibrum-pdf test_data/pdfs/sample.pdf /tmp/sample.json
+```
 
----
+On macOS or Windows, use the platform library suffix in both commands.
 
-## Notes
+## Troubleshooting
 
-* The **shared library (`libmupdf.so`) is the only critical dependency**.
-* Python builds are automated once the shared library exists.
+- `libtomd not found`: install the built wheel, or set `FIBRUMPDF_LIB` to the
+  bridge's absolute path.
+- MuPDF cannot be loaded: verify the runtime is beside the bridge or present in
+  the platform library search path.
+- Linker architecture errors: the Go toolchain, MuPDF runtime, and target wheel
+  must all use the same architecture.
+- Missing headers: initialize the submodule and confirm `mupdf/include/mupdf`
+  exists.
