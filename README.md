@@ -25,7 +25,7 @@ PyMuPDF4LLM and **291×** Docling in this benchmark.
 
 | Extractor | Pages/s | Text score | Table TEDS | Table precision | Table recall |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| **FibrumPDF** | **179.21** | 84.75 | 0.754 | 0.535 | 0.436 |
+| **FibrumPDF** | **179.12** | 84.75 | 0.754 | 0.535 | 0.436 |
 | PyMuPDF4LLM | 4.15 | 86.54 | 0.778 | 0.647 | 0.554 |
 | Docling | 0.62 | 91.13 | 0.821 | 0.796 | 0.738 |
 
