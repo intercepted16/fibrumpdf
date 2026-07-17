@@ -132,11 +132,7 @@ func materializeTables(raw *rawdata.PageData, detectedTables []Table) []Table {
 				if cell.BBox.IsEmpty() {
 					continue
 				}
-				cell.BBox = shrinkCellToContent(cell.BBox, tableChars)
-				cell.Text = extractTextInRectFromChars(tableChars, cell.BBox, !tbl.RuledTable)
-				if cell.Text == "" {
-					cell.Text = extractTextInRect(raw, cell.BBox)
-				}
+				cell.BBox, cell.Text = materializeCell(tableChars, cell.BBox)
 			}
 		}
 		cleanupMaterializedTable(&tbl)
@@ -299,31 +295,6 @@ func charsNearRect(chars []rawdata.Char, rect geometry.Rect) []rawdata.Char {
 	return out
 }
 
-func shrinkCellToContent(cell geometry.Rect, chars []rawdata.Char) geometry.Rect {
-	x0, y0, x1, y1 := cell.X0-2, cell.Y0-2, cell.X1+2, cell.Y1+2
-	var content geometry.Rect
-	for i := range chars {
-		ch := &chars[i]
-		if ch.BBox.X0 < x1 && ch.BBox.X1 > x0 && ch.BBox.Y0 < y1 && ch.BBox.Y1 > y0 {
-			r := geometry.Rect{X0: ch.BBox.X0, Y0: ch.BBox.Y0, X1: ch.BBox.X1, Y1: ch.BBox.Y1}
-			if content.IsEmpty() {
-				content = r
-			} else {
-				content = content.Union(r)
-			}
-		}
-	}
-	if content.IsEmpty() {
-		return cell
-	}
-	return geometry.Rect{
-		X0: geometry.Max32(cell.X0, content.X0),
-		Y0: geometry.Max32(cell.Y0, content.Y0),
-		X1: geometry.Min32(cell.X1, content.X1),
-		Y1: geometry.Min32(cell.Y1, content.Y1),
-	}
-}
-
 func charReadingOrderLess(a, b rawdata.Char) bool {
 	ay, by := (a.BBox.Y0+a.BBox.Y1)*0.5, (b.BBox.Y0+b.BBox.Y1)*0.5
 	lineTol := geometry.Max32(geometry.Max32(a.Size, b.Size)*0.45, 0.8)
@@ -344,49 +315,26 @@ func charReadingOrderLess(a, b rawdata.Char) bool {
 	return false
 }
 
-func extractTextInRect(raw *rawdata.PageData, rect geometry.Rect) string {
-	indices := raw.CharIndicesInRect(rect, nil)
-	if len(indices) == 0 {
-		return ""
-	}
-	chars := make([]rawdata.Char, len(indices))
-	for i, idx := range indices {
-		chars[i] = raw.Chars[idx]
-	}
-	sort.SliceStable(chars, func(i, j int) bool { return charReadingOrderLess(chars[i], chars[j]) })
-	assembler := textutil.NewTextAssembler(textutil.AssembleOptions{
-		InsertSpaces:       true,
-		Normalize:          true,
-		MergeNumericSpaces: true,
-	})
-	return assembler.AssembleOrderedChars(chars)
-}
-
-func extractTextInRectFromChars(chars []rawdata.Char, rect geometry.Rect, allowOverlapFallback bool) string {
+func materializeCell(chars []rawdata.Char, rect geometry.Rect) (geometry.Rect, string) {
 	if len(chars) == 0 || rect.IsEmpty() {
-		return ""
+		return rect, ""
 	}
 	selected := make([]rawdata.Char, 0, 16)
-	xMin, xMax := rect.X0+0.1, rect.X1-0.1
-	yMin, yMax := rect.Y0+0.1, rect.Y1-0.1
+	var content geometry.Rect
 	for i := range chars {
 		ch := chars[i]
 		cx, cy := (ch.BBox.X0+ch.BBox.X1)*0.5, (ch.BBox.Y0+ch.BBox.Y1)*0.5
-		if cx >= xMin && cx <= xMax && cy >= yMin && cy <= yMax {
+		if cx >= rect.X0 && cx <= rect.X1 && cy >= rect.Y0 && cy <= rect.Y1 {
 			selected = append(selected, ch)
-		}
-	}
-	if allowOverlapFallback && len(selected) == 0 {
-		for i := range chars {
-			ch := chars[i]
-			if ch.BBox.X0 < rect.X1 && ch.BBox.X1 > rect.X0 && ch.BBox.Y0 < rect.Y1 && ch.BBox.Y1 > rect.Y0 {
-				selected = append(selected, ch)
-			}
+			content = content.Union(geometry.Rect{
+				X0: ch.BBox.X0, Y0: ch.BBox.Y0, X1: ch.BBox.X1, Y1: ch.BBox.Y1,
+			})
 		}
 	}
 	if len(selected) == 0 {
-		return ""
+		return rect, ""
 	}
+	rect = rect.Intersect(content)
 	sort.SliceStable(selected, func(i, j int) bool { return charReadingOrderLess(selected[i], selected[j]) })
 
 	lines := splitCharsIntoLines(selected)
@@ -396,7 +344,7 @@ func extractTextInRectFromChars(chars []rawdata.Char, rect geometry.Rect, allowO
 		MergeNumericSpaces: true,
 	})
 	if len(lines) <= 1 {
-		return assembler.AssembleOrderedChars(selected)
+		return rect, assembler.AssembleOrderedChars(selected)
 	}
 	parts := make([]string, 0, len(lines))
 	for _, line := range lines {
@@ -406,9 +354,9 @@ func extractTextInRectFromChars(chars []rawdata.Char, rect geometry.Rect, allowO
 		}
 	}
 	if len(parts) == 0 {
-		return ""
+		return rect, ""
 	}
-	return strings.Join(parts, "<br>")
+	return rect, strings.Join(parts, "<br>")
 }
 
 func splitCharsIntoLines(chars []rawdata.Char) [][]rawdata.Char {

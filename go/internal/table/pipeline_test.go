@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/fibrumpdf/go/internal/geometry"
+	rawdata "github.com/fibrumpdf/go/internal/raw"
 )
 
 func TestCleanupRuledTableMergesFragmentsAndDropsEmptyColumns(t *testing.T) {
@@ -76,6 +77,21 @@ func TestSegmentRowsKeepsFullPageTable(t *testing.T) {
 	}
 	if got := len(tables[0].Rows); got != 12 {
 		t.Fatalf("rows = %d, want 12", got)
+	}
+}
+
+func TestMaterializeCellOwnsCharactersByCenter(t *testing.T) {
+	chars := []rawdata.Char{
+		{Codepoint: 'A', Size: 10, BBox: rawdata.Rect{X0: 1, Y0: 1, X1: 3, Y1: 9}},
+		{Codepoint: 'X', Size: 10, BBox: rawdata.Rect{X0: 9, Y0: 1, X1: 13, Y1: 9}},
+	}
+
+	bbox, text := materializeCell(chars, geometry.Rect{X1: 10, Y1: 10})
+	if text != "A" {
+		t.Fatalf("text = %q, want A", text)
+	}
+	if want := (geometry.Rect{X0: 1, Y0: 1, X1: 3, Y1: 9}); bbox != want {
+		t.Fatalf("bbox = %+v, want %+v", bbox, want)
 	}
 }
 
