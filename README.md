@@ -9,10 +9,10 @@
 FibrumPDF turns digital PDFs into structured JSON or clean Markdown without a
 GPU, a model download, or a remote API. It preserves headings, paragraphs,
 lists, tables, reading order, bounding boxes, links, and inline formatting while
-keeping the extraction path native and aggressively parallel.
+keeping extraction native and parallel.
 
-It is built for ingestion pipelines where raw text is not enough, but waiting
-seconds per page is not acceptable.
+The native pipeline targets workloads that need structure without spending
+seconds on every page.
 
 ![Benchmark dashboard](benchmark/results/dashboard.svg)
 
@@ -20,8 +20,8 @@ seconds per page is not acceptable.
 
 The repository benchmark contains 512 documents from the
 `datalab-to/marker_benchmark` dataset. On the documented Ryzen 7 4800H test
-system, the current FibrumPDF build processes **318.2 pages/s**—about **77×**
-PyMuPDF4LLM and **517×** Docling in this benchmark.
+system, the current FibrumPDF build processes **318.2 pages/s**, about **77x**
+PyMuPDF4LLM and **517x** Docling in this benchmark.
 
 | Extractor | Pages/s | Text score | Table TEDS | Table precision | Table recall |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -29,14 +29,13 @@ PyMuPDF4LLM and **517×** Docling in this benchmark.
 | PyMuPDF4LLM | 4.15 | 86.54 | 0.778 | 0.647 | 0.554 |
 | Docling | 0.62 | 91.13 | 0.821 | 0.796 | 0.738 |
 
-FibrumPDF leads PyMuPDF4LLM on every measured dimension here, including table
-precision and recall. ML-based extractors such as Docling remain better on
-difficult tables and irregular layouts, at a substantially higher runtime cost.
+PyMuPDF4LLM is the closest speed comparison. Docling scores higher on difficult
+tables and irregular layouts, but takes substantially longer.
 
 [Open the interactive report](benchmark/results/dashboard.html) or see
 [how the benchmark works](#reproduce-the-benchmark).
 
-## What you get
+## Features
 
 - Semantic blocks: headings, paragraphs, lists, code, figures, and tables.
 - Layout metadata: page numbers and block, row, cell, and span bounding boxes.
@@ -121,39 +120,22 @@ See [the public models](fibrum_pdf/models.py) for the complete schema.
 
 ## How it works
 
-```mermaid
-flowchart LR
-    A[Python API / CLI] --> B[Go shared library]
-    B --> C[MuPDF C extraction]
-    C --> D[Reading-order and text pipeline]
-    C --> E[Unified table pipeline]
-    D --> F[Atomic structured JSON]
-    E --> F
-    F --> G[Streaming pages]
-    F --> H[Typed models]
-    F --> I[Semantic Markdown]
-```
-
 MuPDF handles PDF interpretation. Go performs layout analysis, table detection,
 classification, cleanup, and bounded parallel page processing. Python stays a
 thin orchestration layer and exposes the native result lazily through `ijson`.
 
-Text and vector edges are captured in one native page pass. Ruled tables use
-their line grid; borderless tables are assembled from local, contiguous
-multi-column row runs so long tables remain valid without turning unrelated
-page columns into one giant table. A shared structural gate rejects grids whose
-density and cell-content distribution look like prose columns, diagrams, or
-fragmented labels before they displace correctly extracted text.
+Text and vector edges are captured in one page pass. Ruled tables use line
+grids. Borderless tables are built from contiguous multi-column rows, with
+structural checks to reject prose columns, diagrams, and fragmented labels.
 
-The native bridge serializes MuPDF access where its process-global state requires
-it, while document-level work uses a bounded worker and reorder window. This
-keeps memory proportional to active work rather than total page count.
+MuPDF access is serialized where required. Page processing uses bounded workers,
+so memory use depends on active pages rather than document length.
 
 ## Known limits
 
-FibrumPDF does not run OCR and does not extract embedded images. It is therefore
-not the right tool for scanned PDFs. Forms, spreadsheets, heavily layered pages,
-and unconventional visual layouts can also defeat the heuristic extractor.
+FibrumPDF does not run OCR or extract embedded images. Scanned PDFs require
+another tool. Forms, spreadsheets, heavily layered pages, and unconventional
+visual layouts can also defeat the heuristic extractor.
 
 Use the benchmark as a starting point, then test representative documents from
 your own workload before committing to an extraction stack.
@@ -197,5 +179,4 @@ go vet ./...
 ## License
 
 FibrumPDF is licensed under [AGPL-3.0](LICENSE). MuPDF is also AGPL-licensed and
-is available under a commercial license from Artifex. Confirm that those terms
-fit your distribution model before embedding FibrumPDF in a product.
+is available under a commercial license from Artifex.
