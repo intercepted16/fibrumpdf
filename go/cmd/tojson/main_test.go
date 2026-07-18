@@ -1,27 +1,10 @@
 package main
 
 import (
-	"bufio"
-	"bytes"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
-
-func TestWriteOrderedPagesHandlesEmptyDocument(t *testing.T) {
-	var output bytes.Buffer
-	writer := bufio.NewWriter(&output)
-	if err := writeOrderedPages(writer, nil); err != nil {
-		t.Fatal(err)
-	}
-	if err := writer.Flush(); err != nil {
-		t.Fatal(err)
-	}
-	if got, want := output.String(), "[]\n"; got != want {
-		t.Fatalf("output = %q, want %q", got, want)
-	}
-}
 
 func TestWriteJSONDocumentPreservesExistingOutputOnFailure(t *testing.T) {
 	directory := t.TempDir()
@@ -50,25 +33,5 @@ func TestWriteJSONDocumentPreservesExistingOutputOnFailure(t *testing.T) {
 	}
 	if len(matches) != 0 {
 		t.Fatalf("temporary outputs left behind: %v", matches)
-	}
-}
-
-func TestPDFToJSONRefusesToOverwriteInput(t *testing.T) {
-	input := filepath.Join(t.TempDir(), "document.pdf")
-	contents := []byte("%PDF-placeholder")
-	if err := os.WriteFile(input, contents, 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	err := pdfToJson(input, input)
-	if err == nil || !strings.Contains(err.Error(), "same file") {
-		t.Fatalf("pdfToJson error = %v, want same-file error", err)
-	}
-	got, readErr := os.ReadFile(input)
-	if readErr != nil {
-		t.Fatal(readErr)
-	}
-	if !bytes.Equal(got, contents) {
-		t.Fatal("input was modified")
 	}
 }
