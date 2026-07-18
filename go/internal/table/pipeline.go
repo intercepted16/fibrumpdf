@@ -220,17 +220,59 @@ func hasTableShape(tbl Table) bool {
 	}
 	rowsWithTwoCols := 0
 	activeCols := make(map[int]struct{})
+	populated, cells, textRunes, longCells, tinyCells, maxText := 0, 0, 0, 0, 0, 0
+	minRowFill, maxRowFill := float32(1), float32(0)
 	for _, row := range tbl.Rows {
 		if len(row.Cells) >= 2 {
 			rowsWithTwoCols++
 		}
+		rowPopulated := 0
 		for ci, cell := range row.Cells {
-			if strings.TrimSpace(cell.Text) != "" {
-				activeCols[ci] = struct{}{}
+			cells++
+			text := strings.TrimSpace(strings.ReplaceAll(cell.Text, "<br>", " "))
+			if text == "" {
+				continue
+			}
+			activeCols[ci] = struct{}{}
+			populated++
+			rowPopulated++
+			runeCount := 0
+			for range text {
+				runeCount++
+			}
+			textRunes += runeCount
+			maxText = max(maxText, runeCount)
+			if runeCount > 40 {
+				longCells++
+			}
+			if runeCount <= 3 {
+				tinyCells++
 			}
 		}
+		if len(row.Cells) > 0 {
+			fill := float32(rowPopulated) / float32(len(row.Cells))
+			minRowFill = min(minRowFill, fill)
+			maxRowFill = max(maxRowFill, fill)
+		}
 	}
-	return rowsWithTwoCols >= 1 && len(activeCols) >= 2
+	if rowsWithTwoCols == 0 || len(activeCols) < 2 || populated == 0 {
+		return false
+	}
+
+	fill := float32(populated) / float32(cells)
+	averageText := float32(textRunes) / float32(populated)
+	longFraction := float32(longCells) / float32(populated)
+	tinyFraction := float32(tinyCells) / float32(populated)
+	rowFillRange := maxRowFill - minRowFill
+
+	fragmented := averageText <= 2.6 ||
+		(len(activeCols) <= 4 && tinyFraction >= 0.487)
+	proseLayout := averageText >= 395 ||
+		(longFraction >= 0.19 && maxRowFill <= 0.89) ||
+		(averageText >= 17.4 && maxText <= 35)
+	unstableGrid := (len(tbl.Rows) <= 4 && rowFillRange >= 0.57) ||
+		fill <= 0.30 || (len(activeCols) >= 14 && fill <= 0.40)
+	return !fragmented && !proseLayout && !unstableGrid
 }
 
 func isTableOversized(tableRect, pageRect geometry.Rect) bool {

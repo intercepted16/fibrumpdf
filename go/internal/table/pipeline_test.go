@@ -95,6 +95,40 @@ func TestMaterializeCellOwnsCharactersByCenter(t *testing.T) {
 	}
 }
 
+func TestHasTableShapeKeepsSparseTextTable(t *testing.T) {
+	table := Table{Rows: []Row{
+		{Cells: []Cell{cell("University", 0, 10), cell("Form P1", 10, 20), cell("", 20, 30), cell("", 30, 40), cell("Page 2", 40, 50)}},
+		{Cells: []Cell{cell("", 0, 10), cell("", 10, 20), cell("Repeat examination", 20, 30), cell("Version 1", 30, 40), cell("Valid from March", 40, 50)}},
+	}}
+
+	if !hasTableShape(table) {
+		t.Fatal("sparse text table was rejected")
+	}
+}
+
+func TestHasTableShapeRejectsLayoutArtifacts(t *testing.T) {
+	tests := map[string]Table{
+		"uniform prose fragments": {Rows: []Row{
+			{Cells: []Cell{cell("First paragraph fragment", 0, 10), cell("Second prose fragment", 10, 20)}},
+			{Cells: []Cell{cell("Third paragraph fragment", 0, 10), cell("Fourth prose fragment", 10, 20)}},
+			{Cells: []Cell{cell("Fifth paragraph fragment", 0, 10), cell("Sixth prose fragment", 10, 20)}},
+		}},
+		"fragmented labels": {Rows: []Row{
+			{Cells: []Cell{cell("A", 0, 10), cell("B", 10, 20), cell("C", 20, 30)}},
+			{Cells: []Cell{cell("D", 0, 10), cell("E", 10, 20), cell("F", 20, 30)}},
+			{Cells: []Cell{cell("G", 0, 10), cell("H", 10, 20), cell("I", 20, 30)}},
+		}},
+	}
+
+	for name, table := range tests {
+		t.Run(name, func(t *testing.T) {
+			if hasTableShape(table) {
+				t.Fatal("layout artifact was accepted as a table")
+			}
+		})
+	}
+}
+
 func cell(text string, x0, x1 float32) Cell {
 	return Cell{Text: text, BBox: geometry.Rect{X0: x0, Y0: 0, X1: x1, Y1: 10}}
 }
