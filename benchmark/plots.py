@@ -17,8 +17,8 @@ TABLE_METRICS = [
     ("marker_heuristic_score_median", "Median Score", ".3f", ""),
     ("marker_heuristic_score_stdev", "Score Std", ".3f", ""),
     ("table_teds", "Table TEDS", ".3f", ""),
-    ("table_precision", "Table Prec.", ".3f", ""),
-    ("table_recall", "Table Rec.", ".3f", ""),
+    ("table_precision", "Table Precision", ".3f", ""),
+    ("table_recall", "Table Recall", ".3f", ""),
 ]
 
 
@@ -89,34 +89,6 @@ def dashboard(
     tools = [tool for tool in tools_order if tool in summary_tools]
     tools.extend(tool for tool in COLORS if tool in summary_tools and tool not in tools)
     tools.extend(sorted(summary_tools - set(tools)))
-    table_df = (
-        summary.filter(pl.col("tool").is_in(tools))
-        .select(["tool", "table_precision", "table_recall"])
-        .unpivot(index="tool", variable_name="metric", value_name="value")
-        .with_columns(
-            pl.col("metric").replace(
-                {"table_precision": "Precision", "table_recall": "Recall"}
-            )
-        )
-    )
-    table_metrics = (
-        alt.Chart(table_df)
-        .mark_bar()
-        .encode(
-            x=alt.X("tool:N", sort=tools, title="Tool"),
-            y=alt.Y("value:Q", title="Score", scale=alt.Scale(domain=[0, 1])),
-            color=alt.Color(
-                "metric:N",
-                scale=alt.Scale(
-                    domain=["Precision", "Recall"], range=["#3b82f6", "#f59e0b"]
-                ),
-                title="Metric",
-            ),
-            xOffset="metric:N",
-            tooltip=["tool", "metric", alt.Tooltip("value:Q", format=".3f")],
-        )
-        .properties(height=220, width=300, title="Table Precision & Recall")
-    )
     by_type = (
         df.filter(pl.col("pdf").str.contains("Type:"))
         .group_by(["description", "tool"])
@@ -147,10 +119,11 @@ def dashboard(
                 title="Extraction Speed Comparison"
             ),
             alt.hconcat(
-                _bar(summary, tools, "marker_heuristic_score", "Heuristic Score", 280),
-                _bar(summary, tools, "table_teds", "Table TEDS", 280),
-                table_metrics,
-                spacing=40,
+                _bar(summary, tools, "marker_heuristic_score", "Text Score", 210),
+                _bar(summary, tools, "table_teds", "Table TEDS", 210),
+                _bar(summary, tools, "table_precision", "Table Precision", 210),
+                _bar(summary, tools, "table_recall", "Table Recall", 210),
+                spacing=30,
             ),
             type_chart,
             _summary_table(summary, tools),
