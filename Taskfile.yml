@@ -1,0 +1,93 @@
+version: '3'
+
+vars:
+  PYTHON_CMD: 'python'
+  GO_DIR: './go'
+  PYTHON_PKG: './fibrum_pdf'
+
+tasks:
+  go:dev:
+    desc: "Run Go extractor in dev mode with hot reload (air)"
+    dir: "{{.GO_DIR}}"
+    cmd: air
+
+  go:build:
+    desc: "Build Go extraction binary"
+    dir: "{{.GO_DIR}}"
+    cmd: timeout 60 go build -o ./tmp/main ./cmd/tojson/main.go
+
+  go:test:
+    desc: "Run all Go unit tests"
+    dir: "{{.GO_DIR}}"
+    cmd: timeout 60 go test ./...
+
+  go:test:verbose:
+    desc: "Run Go tests with verbose output"
+    dir: "{{.GO_DIR}}"
+    cmd: timeout 60 go test -v ./...
+
+  go:prof:
+    desc: "Profile Go extractor usage (usage: IN=input.pdf OUT=output_dir)"
+    dir: "{{.GO_DIR}}"
+    vars:
+      IN: '{{.IN | default ""}}'
+      OUT: '{{.OUT | default ""}}'
+    preconditions:
+      - sh: '[ -n "{{.IN}}" ] && [ -n "{{.OUT}}" ]'
+        msg: "Required: IN=input.pdf OUT=output_dir (e.g., task go:prof:cpu -- IN=test.pdf OUT=results)"
+    cmds:
+      - timeout 60 go build -o ./tmp/main ./cmd/tojson/main.go
+      - timeout 60 ./tmp/main --cpuprofile=cpu.prof --memprofile=heap.prof {{.IN}} {{.OUT}}
+      - timeout 60 go tool pprof -no_browser -http=:8080 cpu.prof
+
+  go:lint:
+    desc: "Lint Go code"
+    dir: "{{.GO_DIR}}"
+    cmd: timeout 60 golangci-lint run ./...
+
+  py:install:
+    desc: "Install Python package with dev dependencies"
+    cmd: timeout 60 uv pip install .[dev]
+
+  py:lint:
+    desc: "Lint Python code with Ruff"
+    cmd: timeout 60 ruff check .
+
+  py:format:
+    desc: "Format Python code with Ruff"
+    cmd: timeout 60 ruff format .
+
+  py:check:
+    desc: "Run both lint and format checks (non-destructive)"
+    cmd: timeout 60 ruff check . --select=E,W,F,I
+
+  py:build:
+    desc: "Build Python sdist and wheel distributions"
+    cmd: timeout 60 python -m build
+
+  cli:test:
+    desc: "Test Python CLI (usage: INPUT_PDF OUTPUT_DIR)"
+    vars:
+      INPUT: '{{.INPUT | default "test_data/sample.pdf"}}'
+      OUTPUT: '{{.OUTPUT | default "./results"}}'
+    cmd: timeout 60 {{.PYTHON_CMD}} -m fibrum_pdf.main {{.INPUT}} {{.OUTPUT}}
+
+
+  clean:
+    desc: "Clean build artifacts and cache directories"
+    cmds:
+      - rm -rf build/ dist/ *.egg-info .pytest_cache .ruff_cache .uv-cache
+      - rm -rf go/tmp/ go/build-errors.log *.prof
+      - find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+
+  clean:results:
+    desc: "Clean benchmark results and outputs"
+    cmd: rm -rf benchmark/results
+
+  bench:
+    desc: "run Fibrum benchmark only for regression tests (256 rows)"
+    cmd: timeout 60 {{.PYTHON_CMD}} -m benchmark run --dataset-path ./benchmark/data --tool fibrum --max-rows 256 --output ./benchmark/results/
+
+  default:
+    desc: "Show all available tasks"
+    cmd: task --list
