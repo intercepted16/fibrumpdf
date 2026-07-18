@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fibrum-pdf"
-version = "1.1.2"
+version = "1.2.0"
 description = "Fast, structured PDF extraction to JSON and Markdown."
 authors = [{ name = "Adit Bajaj" }]
 readme = "README.md"
