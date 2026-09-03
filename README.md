@@ -8,11 +8,11 @@ The idea is pretty simple: there are very fast PDF extractors that mostly give y
 
 FibrumPDF sits somewhere in the middle.
 
-It uses MuPDF for the low-level PDF work, then Go and a set of layout heuristics to reconstruct the document. No OCR, GPU or model inference.
+It uses MuPDF for the low-level PDF work and a set of layout heuristics to reconstruct the document written in Go. There's no OCR, GPU or model inference.
 
 On the current 512-document benchmark:
 
-|                     |  FibrumPDF | PyMuPDF4LLM |   Docling |
+| Metric |  FibrumPDF | PyMuPDF4LLM |   Docling |
 | ------------------- | ---------: | ----------: | --------: |
 | **Pages/sec**       | **318.23** |        4.15 |      0.62 |
 | **Text score**      |  **87.31** |       86.54 |     91.13 |
@@ -20,7 +20,9 @@ On the current 512-document benchmark:
 | **Table precision** |      0.661 |       0.647 | **0.796** |
 | **Table recall**    |      0.590 |       0.554 | **0.738** |
 
-So compared with PyMuPDF4LLM, that's about **77× the throughput with similar measured extraction quality**. Docling does better on harder tables and layouts, but is considerably slower.
+It's about 77x faster than PyMuPDF4LLM with comparable quality.
+
+Docling leads in quality, especially on tables, excelling on scanned or complex documents, but is much slower. 
 
 ![Speed](benchmark/results/speed.png)
 
