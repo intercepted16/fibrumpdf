@@ -12,13 +12,14 @@ It uses MuPDF for the low-level PDF work and a set of layout heuristics to recon
 
 On the current 512-document benchmark:
 
-| Metric |  FibrumPDF | PyMuPDF4LLM |   Docling |
-| ------------------- | ---------: | ----------: | --------: |
-| **Pages/sec**       | **318.23** |        4.15 |      0.62 |
-| **Text score**      |  **87.31** |       86.54 |     91.13 |
-| **Table TEDS**      |  **0.783** |       0.778 |     0.821 |
-| **Table precision** |      0.661 |       0.647 | **0.796** |
-| **Table recall**    |      0.590 |       0.554 | **0.738** |
+| Metric | FibrumPDF | PyMuPDF4LLM | Docling |
+| ------------------- | --------: | ----------: | --------: |
+| **Pages/sec**       |    318.23 |        4.15 |      0.62 |
+| **Text score**      |     87.31 |       86.54 |     91.13 |
+| **Table precision** |      0.661 |       0.647 |     0.796 |
+| **Table recall**    |      0.590 |       0.554 |     0.738 |
+
+> The above is a summary table, see benchmark details below.
 
 It's about 77x faster than PyMuPDF4LLM with comparable quality.
 
