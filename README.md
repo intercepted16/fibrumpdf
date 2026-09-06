@@ -2,6 +2,8 @@
 
 **Structured PDF extraction at 318 pages/second on CPU.**
 
+![Speed comparison](benchmark/results/speed.png)
+
 FibrumPDF extracts PDFs into structured JSON or Markdown, preserving things like headings, lists, tables, reading order, links, formatting and layout information.
 
 The idea is pretty simple: there are very fast PDF extractors that mostly give you text, and much heavier document parsers that give you great structure but can take seconds per page.
@@ -10,26 +12,40 @@ FibrumPDF sits somewhere in the middle.
 
 It uses MuPDF for the low-level PDF work and a set of layout heuristics to reconstruct the document written in Go. There's no OCR, GPU or model inference.
 
-On the current 512-document benchmark:
-
-| Metric | FibrumPDF | PyMuPDF4LLM | Docling |
-| ------------------- | --------: | ----------: | --------: |
-| **Pages/sec**       |    318.23 |        4.15 |      0.62 |
-| **Text score**      |     87.31 |       86.54 |     91.13 |
-| **Table precision** |      0.661 |       0.647 |     0.796 |
-| **Table recall**    |      0.590 |       0.554 |     0.738 |
-
-> The above is a summary table, see benchmark details below.
-
-It's about 77x faster than PyMuPDF4LLM with comparable quality.
-
-Docling leads in quality, especially on tables, excelling on scanned or complex documents, but is much slower. 
-
-![Speed](benchmark/results/speed.png)
-
-![Quality](benchmark/results/quality.png)
-
 [Benchmark details](#benchmark) · [Build from source](BUILD.md)
+
+## Benchmark
+
+| Extractor     |    Pages/s | Text score | Table TEDS | Table precision | Table recall |
+| ------------- | ---------: | ---------: | ---------: | --------------: | -----------: |
+| **FibrumPDF** | **318.23** |  **87.31** |  **0.783** |       **0.661** |    **0.590** |
+| PyMuPDF4LLM   |       4.15 |      86.54 |      0.778 |           0.647 |        0.554 |
+| Docling       |       0.62 |      91.13 |      0.821 |           0.796 |        0.738 |
+
+**Test system:** AMD Ryzen 7 4800H, with a GTX 1650 Ti available to Docling.
+
+Throughput depends heavily on hardware, so the exact pages/second isn't particularly portable. The benchmark is mainly useful for comparing the speed/quality tradeoff between the extractors on the same machine and dataset.
+
+## Tradeoffs
+
+FibrumPDF is **not** trying to beat ML-based document parsers on every document.
+
+It works best on digital PDFs where text and layout information are already present.
+
+It does not currently:
+
+* run OCR
+* extract embedded images
+* handle every form or spreadsheet-style document
+* match ML-based parsers on particularly difficult layouts and tables
+
+That's the tradeoff behind the performance.
+
+If you have scanned documents or need the highest possible extraction quality regardless of compute, something like Docling will probably be a better fit.
+
+If you only need raw text, a simpler extractor will probably be faster.
+
+FibrumPDF is for when you want the structure too.
 
 ## Install
 
@@ -134,27 +150,6 @@ Pages are processed concurrently with bounded workers, and page data is extracte
 
 There isn't really one trick responsible for the speed. It's mostly keeping the hot path compiled, doing less work, and avoiding expensive work in the first place.
 
-## Tradeoffs
-
-FibrumPDF is **not** trying to beat ML-based document parsers on every document.
-
-It works best on digital PDFs where text and layout information are already present.
-
-It does not currently:
-
-* run OCR
-* extract embedded images
-* handle every form or spreadsheet-style document
-* match ML-based parsers on particularly difficult layouts and tables
-
-That's the tradeoff behind the performance.
-
-If you have scanned documents or need the highest possible extraction quality regardless of compute, something like Docling will probably be a better fit.
-
-If you only need raw text, a simpler extractor will probably be faster.
-
-FibrumPDF is for when you want the structure too.
-
 ## CLI
 
 ```bash
@@ -162,21 +157,25 @@ fibrum-pdf report.pdf report.json
 fibrum-pdf report.pdf report.md --format markdown
 ```
 
-## Benchmark
+## Full benchmark details
 
 The committed benchmark uses 512 deterministic samples from `datalab-to/marker_benchmark`.
 
-**Test system:** AMD Ryzen 7 4800H, with a GTX 1650 Ti available to Docling.
+### Charts
 
-| Extractor     |    Pages/s | Text score | Table TEDS | Table precision | Table recall |
-| ------------- | ---------: | ---------: | ---------: | --------------: | -----------: |
-| **FibrumPDF** | **318.23** |  **87.31** |  **0.783** |       **0.661** |    **0.590** |
-| PyMuPDF4LLM   |       4.15 |      86.54 |      0.778 |           0.647 |        0.554 |
-| Docling       |       0.62 |      91.13 |      0.821 |           0.796 |        0.738 |
+| Text quality | Table fidelity |
+| --- | --- |
+| ![Text quality comparison](benchmark/results/text_score.png) | ![Table fidelity comparison](benchmark/results/teds.png) |
 
-Throughput depends heavily on hardware, so the exact pages/second isn't particularly portable. The benchmark is mainly useful for comparing the speed/quality tradeoff between the extractors on the same machine and dataset.
+![Table precision and recall](benchmark/results/precision_recall.png)
 
-Results and generated reports are in [`benchmark/results/`](benchmark/results/).
+![Quality by document type](benchmark/results/heatmap.png)
+
+All generated reports are in [`benchmark/results/`](benchmark/results/). Regenerate the charts from an existing `benchmark.csv` with:
+
+```bash
+uv run python -m benchmark run --graph-only
+```
 
 To reproduce it:
 
@@ -206,4 +205,3 @@ Source builds currently require MuPDF 1.27.
 FibrumPDF is licensed under [AGPL-3.0](LICENSE).
 
 MuPDF is also AGPL-licensed and is available under a commercial license from Artifex.
-
