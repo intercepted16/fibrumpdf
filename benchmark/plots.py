@@ -1,137 +1,227 @@
-"""Altair dashboard generation."""
+"""Generate benchmark comparison charts."""
 
-# pyright: reportUnknownVariableType=false
+from __future__ import annotations
 
 from pathlib import Path
 
 import altair as alt
 import polars as pl
 
-COLORS = {"fibrum": "#10b981", "pymupdf4llm": "#3b82f6", "docling": "#ef4444"}
-TABLE_METRICS = [
-    ("time_mean_s", "Mean Time", ".3f", "s"),
-    ("time_median_s", "Median Time", ".3f", "s"),
-    ("pages_per_s", "Throughput", ".1f", " pg/s"),
-    ("pages_per_s_stdev", "Throughput Std", ".3f", ""),
-    ("marker_heuristic_score", "Mean Score", ".3f", ""),
-    ("marker_heuristic_score_median", "Median Score", ".3f", ""),
-    ("marker_heuristic_score_stdev", "Score Std", ".3f", ""),
-    ("table_teds", "Table TEDS", ".3f", ""),
-    ("table_precision", "Table Precision", ".3f", ""),
-    ("table_recall", "Table Recall", ".3f", ""),
-]
+COLORS = {
+    "fibrum": "#00a67e",  # benchmark subject: vivid green
+    "pymupdf4llm": "#94a3b8",
+    "docling": "#64748b",
+}
+FALLBACK_COLOR = "#9ca3af"
+
+WIDTH = 680
+ROW_HEIGHT = 36
 
 
-def _bar(df: pl.DataFrame, tools: list[str], field: str, title: str, width: int):
-    return (
-        alt.Chart(df)
-        .mark_bar()
-        .encode(
-            x=alt.X("tool:N", sort=tools, title="Tool"),
-            y=alt.Y(f"{field}:Q", title=title),
-            color=alt.Color(
-                "tool:N",
-                scale=alt.Scale(
-                    domain=tools, range=[COLORS.get(tool, "#6b7280") for tool in tools]
-                ),
-                legend=None,
-            ),
-            tooltip=["tool", field],
-        )
-        .properties(height=220, width=width)
-    )
-
-
-def _summary_table(df: pl.DataFrame, tools: list[str]):
-    fields = []
-    labels = {"tool": "Tool"}
-    for field, label, _, _ in TABLE_METRICS:
-        fields.append(field)
-        labels[field] = label
-    select_columns = ["tool"]
-    select_columns.extend(fields)
-    table = df.filter(pl.col("tool").is_in(tools)).select(select_columns).rename(labels)
-    rows = []
-    for row in table.iter_rows(named=True):
-        formatted = {"Tool": row["Tool"]}
-        for _, label, spec, suffix in TABLE_METRICS:
-            value = row[label]
-            formatted[label] = f"{value:{spec}}{suffix}" if value is not None else ""
-        rows.append(formatted)
-    melted = pl.DataFrame(rows).unpivot(
-        index="Tool", variable_name="Metric", value_name="Value"
-    )
-    base = alt.Chart(melted).encode(
-        x=alt.X(
-            "Metric:N",
-            sort=[label for _, label, *_ in TABLE_METRICS],
-            title=None,
-            axis=alt.Axis(orient="top"),
-        ),
-        y=alt.Y("Tool:N", sort=tools, title=None),
-    )
-    return (
-        base.mark_rect().encode(
-            color=alt.value("transparent"), stroke=alt.value("#eeeeee")
-        )
-        + base.mark_text(size=12, font="monospace").encode(text="Value:N")
-    ).properties(title="Summary Metrics Table", width=800, height=40 * len(tools))
-
-
-def dashboard(
-    csv_path: Path, out_path: Path, tools_order: list[str]
-) -> alt.TopLevelMixin | None:
+def _load(csv_path: Path, tools_order: list[str]):
     df = pl.read_csv(csv_path, schema_overrides={"pdf": pl.Utf8})
     summary = df.filter(pl.col("pdf") == "ALL")
     if summary.is_empty():
         return None
-    summary_tools = set(summary["tool"].to_list())
-    tools = [tool for tool in tools_order if tool in summary_tools]
-    tools.extend(tool for tool in COLORS if tool in summary_tools and tool not in tools)
-    tools.extend(sorted(summary_tools - set(tools)))
+
+    present = set(summary["tool"].to_list())
+    tools = ["fibrum"] if "fibrum" in present else []
+    tools += [t for t in tools_order if t in present and t not in tools]
+    tools += [t for t in COLORS if t in present and t not in tools]
+    tools += sorted(present - set(tools))
+    return df, summary, tools
+
+
+def _color_scale(tools: list[str]) -> alt.Scale:
+    return alt.Scale(domain=tools, range=[COLORS.get(t, FALLBACK_COLOR) for t in tools])
+
+
+def _style(chart: alt.Chart) -> alt.Chart:
+    return (
+        chart.configure_view(strokeWidth=0)
+        .configure_title(fontSize=17, fontWeight=600, anchor="start", color="#111827")
+        .configure_axis(
+            labelFontSize=11,
+            titleFontSize=11,
+            grid=False,
+            tickColor="#cbd5e1",
+            domainColor="#94a3b8",
+        )
+    )
+
+
+def _bar(
+    summary: pl.DataFrame,
+    tools: list[str],
+    field: str,
+    title: str,
+    *,
+    domain: list[float],
+    log: bool = False,
+    baseline: str | None = None,
+) -> alt.Chart:
+    scale = alt.Scale(domain=domain, type="log" if log else "linear")
+    axis = alt.Axis(values=[0.5, 1, 10, 100]) if log else alt.Axis(tickCount=4)
+    bars = (
+        alt.Chart(summary)
+        .mark_bar(size=24, cornerRadiusEnd=3)
+        .encode(
+            y=alt.Y("tool:N", sort=tools, title=None),
+            x=alt.X(
+                f"{field}:Q",
+                title=None,
+                axis=axis,
+                scale=scale,
+            ),
+            x2=alt.X2(f"{baseline}:Q") if baseline else alt.value(0),
+            color=alt.Color("tool:N", scale=_color_scale(tools), legend=None),
+            tooltip=["tool", field],
+        )
+    )
+    labels = (
+        alt.Chart(summary)
+        .mark_text(align="left", baseline="middle", dx=7, fontSize=11, color="#111827")
+        .encode(
+            y=alt.Y("tool:N", sort=tools, title=None),
+            x=alt.X(f"{field}:Q", scale=scale),
+            text=alt.Text(f"{field}:Q", format=".3~g"),
+        )
+    )
+    return _style(
+        (bars + labels).properties(
+            title=title,
+            width=WIDTH,
+            height=ROW_HEIGHT * len(tools),
+        )
+    )
+
+
+def speed_chart(summary: pl.DataFrame, tools: list[str]) -> alt.Chart:
+    floor = max(float(summary["pages_per_s"].min()) / 2, 0.01)
+    speed = summary.with_columns(pl.lit(floor).alias("speed_floor"))
+    return _bar(
+        speed,
+        tools,
+        "pages_per_s",
+        "Speed (pages/s · log scale)",
+        domain=[floor, max(float(summary["pages_per_s"].max()) * 1.5, 1)],
+        log=True,
+        baseline="speed_floor",
+    )
+
+
+def text_score_chart(summary: pl.DataFrame, tools: list[str]) -> alt.Chart:
+    return _bar(
+        summary,
+        tools,
+        "marker_heuristic_score",
+        "Text quality",
+        domain=[0, 100],
+    )
+
+
+def teds_chart(summary: pl.DataFrame, tools: list[str]) -> alt.Chart:
+    return _bar(summary, tools, "table_teds", "Table fidelity (TEDS)", domain=[0, 1])
+
+
+def precision_recall_chart(summary: pl.DataFrame, tools: list[str]) -> alt.Chart:
+    long = summary.select(["tool", "table_precision", "table_recall"]).unpivot(
+        index="tool", variable_name="metric", value_name="value"
+    )
+    long = long.with_columns(
+        pl.col("metric").replace(
+            {"table_precision": "Precision", "table_recall": "Recall"}
+        )
+    )
+    bars = (
+        alt.Chart(long)
+        .mark_bar(size=24, cornerRadiusEnd=3)
+        .encode(
+            y=alt.Y("tool:N", sort=tools, title=None),
+            x=alt.X(
+                "value:Q",
+                title=None,
+                axis=alt.Axis(tickCount=4),
+                scale=alt.Scale(domain=[0, 1]),
+            ),
+            color=alt.Color("tool:N", scale=_color_scale(tools), legend=None),
+            tooltip=["tool", "metric", "value"],
+        )
+    )
+    labels = (
+        alt.Chart(long)
+        .mark_text(align="left", baseline="middle", dx=7, fontSize=11, color="#111827")
+        .encode(
+            y=alt.Y("tool:N", sort=tools, title=None),
+            x=alt.X("value:Q", scale=alt.Scale(domain=[0, 1])),
+            text=alt.Text("value:Q", format=".0%"),
+        )
+    )
+    return _style(
+        alt.layer(bars, labels)
+        .properties(width=(WIDTH - 28) // 2, height=ROW_HEIGHT * len(tools))
+        .facet(
+            column=alt.Column(
+                "metric:N",
+                sort=["Precision", "Recall"],
+                title=None,
+                header=alt.Header(labelFontSize=13, labelFontWeight=600),
+            )
+        )
+        .properties(
+            title="Table accuracy",
+            columns=2,
+        )
+    )
+
+
+def heatmap_chart(df: pl.DataFrame, tools: list[str]) -> alt.Chart:
     by_type = (
         df.filter(pl.col("pdf").str.contains("Type:"))
+        .filter(pl.col("tool").is_in(tools))
         .group_by(["description", "tool"])
         .agg(pl.col("marker_heuristic_score").mean())
     )
-    type_chart = (
-        alt.Chart(by_type.filter(pl.col("tool").is_in(tools)))
+    chart = (
+        alt.Chart(by_type)
         .mark_rect()
         .encode(
-            x=alt.X("description:N", title="Document Type", sort=None),
-            y=alt.Y("tool:N", title="Tool", sort=tools),
+            x=alt.X("description:N", title=None, sort=None),
+            y=alt.Y("tool:N", title=None, sort=tools),
             color=alt.Color(
                 "marker_heuristic_score:Q",
-                title="Avg Quality",
-                scale=alt.Scale(domain=[0, 100], scheme="greenblue"),
+                title="Score",
+                scale=alt.Scale(domain=[70, 100], range=["#e2e8f0", "#00a67e"]),
             ),
             tooltip=["tool", "description", "marker_heuristic_score"],
         )
         .properties(
             title="Quality by Document Type",
-            width=50 * max(1, by_type["description"].n_unique()),
-            height=220,
+            width=max(WIDTH, 60 * by_type["description"].n_unique()),
+            height=ROW_HEIGHT * len(tools) + 20,
         )
     )
-    chart = (
-        alt.vconcat(
-            _bar(summary, tools, "pages_per_s", "Throughput (pg/s)", 600).properties(
-                title="Extraction Speed Comparison"
-            ),
-            alt.hconcat(
-                _bar(summary, tools, "marker_heuristic_score", "Text Score", 210),
-                _bar(summary, tools, "table_teds", "Table TEDS", 210),
-                _bar(summary, tools, "table_precision", "Table Precision", 210),
-                _bar(summary, tools, "table_recall", "Table Recall", 210),
-                spacing=30,
-            ),
-            type_chart,
-            _summary_table(summary, tools),
-            spacing=60,
-        )
-        .configure_view(strokeWidth=0)
-        .configure_title(fontSize=18, anchor="start", color="#333333")
-        .configure_axis(labelFontSize=11, titleFontSize=13)
-    )
-    chart.save(out_path if out_path.suffix else out_path / "dashboard.html")
-    return chart
+    return _style(chart)
+
+
+def save_charts(csv_path: Path, out_dir: Path, tools_order: list[str]) -> list[Path]:
+    loaded = _load(csv_path, tools_order)
+    if loaded is None:
+        return []
+    df, summary, tools = loaded
+
+    charts = {
+        "speed": speed_chart(summary, tools),
+        "text_score": text_score_chart(summary, tools),
+        "teds": teds_chart(summary, tools),
+        "precision_recall": precision_recall_chart(summary, tools),
+        "heatmap": heatmap_chart(df, tools),
+    }
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    saved = []
+    for name, chart in charts.items():
+        path = out_dir / f"{name}.png"
+        chart.save(path)
+        saved.append(path)
+    return saved

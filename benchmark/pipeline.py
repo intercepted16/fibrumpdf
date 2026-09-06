@@ -11,10 +11,10 @@ from rich.console import Console
 from rich.progress import track
 
 from benchmark.normalize import distribute_pages, reconcile_pages
-from benchmark.plots import dashboard
 from benchmark.results import merge_results, rows_frame, write_results
 from benchmark.runner import ToolRunResult, run_tool
 from benchmark.scoring import score_text
+from benchmark.plots import save_charts
 
 SHARD_PAGE_TARGET = 300
 console = Console()
@@ -213,10 +213,19 @@ def _run_tools(config: BenchmarkConfig, layout: ArtifactLayout, shards: list[Sha
 
 
 def _finish(config: BenchmarkConfig, layout: ArtifactLayout) -> Path:
-    if layout.csv_path.exists():
-        chart = dashboard(layout.csv_path, config.output, config.tools)
-        if chart is not None:
-            chart.save(config.output / "dashboard.svg")
+    if not layout.csv_path.exists():
+        if config.graph_only:
+            raise FileNotFoundError(
+                f"Cannot generate graphs: benchmark results were not found at "
+                f"{layout.csv_path}. Pass --output with the directory containing "
+                "benchmark.csv."
+            )
+        return layout.csv_path
+    saved = save_charts(layout.csv_path, config.output, config.tools)
+    if saved:
+        console.print(
+            f"[green]Generated {len(saved)} charts in {config.output}[/green]"
+        )
     return layout.csv_path
 
 

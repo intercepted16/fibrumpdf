@@ -99,7 +99,7 @@ def download(
 @app.command()
 def run(
     dataset_path: Annotated[Path | None, typer.Option()] = None,
-    output: Annotated[Path, typer.Option("--output", "-o")] = Path("results"),
+    output: Annotated[Path, typer.Option("--output", "-o")] = Path("benchmark/results"),
     tools: Annotated[list[str] | None, typer.Option("--tool", "-t")] = None,
     max_rows: Annotated[int | None, typer.Option("--max-rows")] = None,
     seed: Annotated[int, typer.Option("--seed")] = 0,
@@ -107,18 +107,21 @@ def run(
     update_only: Annotated[list[str] | None, typer.Option("--update-only")] = None,
     graph_only: bool = False,
 ) -> None:
-    csv_path = run_benchmark(
-        _config(
-            dataset_path=dataset_path,
-            output=output,
-            tools=tools,
-            max_rows=max_rows,
-            seed=seed,
-            runs=runs,
-            update_only=update_only,
-            graph_only=graph_only,
+    try:
+        csv_path = run_benchmark(
+            _config(
+                dataset_path=dataset_path,
+                output=output,
+                tools=tools,
+                max_rows=max_rows,
+                seed=seed,
+                runs=runs,
+                update_only=update_only,
+                graph_only=graph_only,
+            )
         )
-    )
+    except FileNotFoundError as error:
+        raise typer.BadParameter(str(error)) from error
     if csv_path.exists():
         _summary(csv_path)
 

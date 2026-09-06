@@ -1,5 +1,3 @@
-"""Tree-edit-distance table similarity."""
-
 import Levenshtein
 from apted import APTED, Config
 from apted.helpers import Tree
