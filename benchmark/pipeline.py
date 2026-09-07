@@ -1,51 +1,35 @@
-"""Benchmark orchestration pipeline."""
+"""Benchmark orchestration: sample, shard, execute, score, and chart."""
 
 import json
 from collections import Counter
-from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import NamedTuple, cast
+from typing import NamedTuple
 
+import polars as pl
 from rich.console import Console
 from rich.progress import track
 
-from benchmark.normalize import distribute_pages, reconcile_pages
-from benchmark.results import merge_results, rows_frame, write_results
-from benchmark.runner import ToolRunResult, run_tool
-from benchmark.scoring import score_text
 from benchmark.plots import save_charts
+from benchmark.results import conform, read_results, write_results
+from benchmark.runner import run_tool
+from benchmark.scoring import score_text
 
 SHARD_PAGE_TARGET = 300
 console = Console()
-FeatureCounts = dict[str, int]
-ResultValue = str | int | float
-ResultRow = dict[str, ResultValue]
 
 
-class DocSample(NamedTuple):
+class Doc(NamedTuple):
     uuid: str
-    pdf: bytes
     pages: int
     gt: str
-    description: str = ""
-    language: str = ""
-
-    def result_row(self, tool: str) -> ResultRow:
-        return {
-            "pdf": self.uuid,
-            "description": self.description,
-            "language": self.language,
-            "tool": tool,
-            "pages": float(self.pages),
-            "error": "",
-        }
+    description: str
+    language: str
 
 
 class Shard(NamedTuple):
-    merged_pdf: Path
-    pages: int
-    docs: list[DocSample]
+    pdf: Path
+    docs: list[Doc]
 
 
 @dataclass
@@ -59,38 +43,89 @@ class BenchmarkConfig:
     graph_only: bool = False
     update_only: bool = False
 
-
-class ArtifactLayout(NamedTuple):
-    output: Path
-
     @property
-    def csv_path(self) -> Path:
+    def csv_path(self):
         return self.output / "benchmark.csv"
 
-    @property
-    def markdown_dir(self) -> Path:
-        return self.output / "markdown"
 
-    @property
-    def merged_dir(self) -> Path:
-        return self.output / "_shards" / "merged"
+def run_benchmark(config):
+    if config.graph_only and not config.csv_path.exists():
+        raise FileNotFoundError(
+            "Cannot generate graphs: benchmark results were not found at "
+            f"{config.csv_path}. Pass --output with the directory containing "
+            "benchmark.csv."
+        )
+    config.output.mkdir(parents=True, exist_ok=True)
+    if not config.graph_only:
+        keep = config.update_only and config.csv_path.exists()
+        write_results(
+            config.csv_path,
+            _run_tools(config),
+            read_results(config.csv_path) if keep else None,
+        )
+    if saved := save_charts(config.csv_path, config.output, config.tools):
+        console.print(
+            f"[green]Generated {len(saved)} charts in {config.output}[/green]"
+        )
+    return config.csv_path
 
-    def prepare_output(self) -> None:
-        self.output.mkdir(parents=True, exist_ok=True)
 
-    def prepare_run(self) -> None:
-        self.markdown_dir.mkdir(parents=True, exist_ok=True)
-        self.merged_dir.mkdir(parents=True, exist_ok=True)
+def _run_tools(config):
+    shards = _shards(config)
+    rows = []
+    for tool in config.tools:
+        with console.status(f"[bold green]Executing {tool}", spinner="dots"):
+            for shard in shards:
+                run = run_tool(tool, shard.pdf, runs=config.runs)
+                rows += _score(config, tool, shard, run)
+    return conform(pl.from_dicts(rows) if rows else pl.DataFrame())
 
-    def markdown_path(self, tool: str, uuid: str) -> Path:
-        return self.markdown_dir / tool / f"{uuid}.md"
+
+def _score(config, tool, shard, run):
+    counts = [doc.pages for doc in shard.docs]
+    total = sum(counts)
+    pages = _fit_pages(run.pages, run.text, total)
+    texts = ["\n---\n\n".join(group).strip() for group in _regroup(pages, counts)]
+    features = [
+        dict(sum(map(Counter, group), Counter())) or None
+        for group in _regroup(run.features or [], counts)
+    ]
+    rows = []
+    for doc, text, doc_features in zip(shard.docs, texts, features, strict=True):
+        path = config.output / "markdown" / tool / f"{doc.uuid}.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        rows.append(
+            {
+                "pdf": doc.uuid,
+                "description": doc.description,
+                "language": doc.language,
+                "tool": tool,
+                "pages": float(doc.pages),
+                "error": "",
+                **run.timing(doc.pages / total),
+                **score_text(text, doc.gt, doc_features),
+            }
+        )
+    return rows
 
 
-def _dataset(config: BenchmarkConfig):
-    import datasets
+def _regroup(items, counts):
+    start = 0
+    for count in counts:
+        yield items[start : start + count]
+        start += count
 
-    dataset = datasets.load_from_disk(config.dataset_path).shuffle(seed=config.seed)
-    return dataset.select(range(min(config.max_rows or len(dataset), len(dataset))))
+
+def _fit_pages(pages, fallback, expected):
+    # tools do not always return one entry per page; fold or pad to match.
+    content = [page.strip() for page in pages] or [fallback.strip()]
+    if expected <= 1:
+        return ["\n\n".join(content).strip()]
+    if len(content) > expected:
+        tail = "\n\n".join(content[expected - 1 :]).strip()
+        return [*content[: expected - 1], tail]
+    return [*content, *([""] * (expected - len(content)))]
 
 
 def _pymupdf():
@@ -101,143 +136,44 @@ def _pymupdf():
     return pymupdf
 
 
-def _page_count(pdf: bytes) -> int:
-    pymupdf = _pymupdf()
-
-    with pymupdf.open(stream=pdf, filetype="pdf") as doc:
-        return max(1, doc.page_count)
-
-
-def _sample(row: Mapping[str, object]) -> DocSample:
-    uuid = "" if row["uuid"] is None else str(row["uuid"])
-    pdf = cast(bytes, row["pdf"])
+def _doc(row):
     gt = row.get("gt_blocks") or []
-    return DocSample(
-        uuid=uuid,
-        pdf=pdf,
-        pages=_page_count(pdf),
+    with _pymupdf().open(stream=row["pdf"], filetype="pdf") as pdf:
+        pages = max(1, pdf.page_count)
+    return Doc(
+        uuid="" if row["uuid"] is None else str(row["uuid"]),
+        pages=pages,
         gt=gt if isinstance(gt, str) else json.dumps(gt, ensure_ascii=False),
         description=str(row.get("classification") or ""),
         language=str(row.get("language") or ""),
     )
 
 
-def _samples(config: BenchmarkConfig) -> Iterable[DocSample]:
-    rows = track(_dataset(config), description="Loading samples...")
-    return (_sample(row) for row in rows)
-
-
-def _merge_pdfs(output: Path, docs: Iterable[DocSample]) -> None:
+def _merge(config, index, batch):
     pymupdf = _pymupdf()
-
-    with pymupdf.open() as merged:
-        for sample in docs:
-            with pymupdf.open(stream=sample.pdf, filetype="pdf") as src:
-                merged.insert_pdf(src)
-        merged.save(output)
-
-
-def _shard(
-    layout: ArtifactLayout, index: int, docs: list[DocSample], pages: int
-) -> Shard:
-    merged_pdf = layout.merged_dir / f"shard_{index:05d}.pdf"
-    _merge_pdfs(merged_pdf, docs)
-    return Shard(merged_pdf=merged_pdf, pages=pages, docs=docs)
-
-
-def _shards(layout: ArtifactLayout, samples: Iterable[DocSample]) -> list[Shard]:
-    shards, batch, pages = [], [], 0
-    for sample in track(samples, description="Sharding..."):
-        batch.append(sample)
-        pages += sample.pages
-        if pages >= SHARD_PAGE_TARGET:
-            shards.append(_shard(layout, len(shards), batch, pages))
-            batch, pages = [], 0
-    return shards + ([_shard(layout, len(shards), batch, pages)] if batch else [])
-
-
-def _feature_buckets(
-    features: list[FeatureCounts] | None,
-    page_counts: list[int],
-) -> list[FeatureCounts | None]:
-    if not features:
-        return [None] * len(page_counts)
-    buckets = []
-    start = 0
-    for count in page_counts:
-        end = start + count
-        bucket = Counter()
-        for page_features in features[start:end]:
-            bucket.update(page_features)
-        buckets.append(dict(bucket) or None)
-        start = end
-    return buckets
-
-
-def _write_markdown(layout: ArtifactLayout, tool: str, uuid: str, text: str) -> None:
-    path = layout.markdown_path(tool, uuid)
+    path = config.output / "_shards" / "merged" / f"shard_{index:05d}.pdf"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8")
+    with pymupdf.open() as merged:
+        for _, pdf in batch:
+            with pymupdf.open(stream=pdf, filetype="pdf") as source:
+                merged.insert_pdf(source)
+        merged.save(path)
+    return Shard(path, [doc for doc, _ in batch])
 
 
-def _score_run(
-    layout: ArtifactLayout,
-    tool: str,
-    shard: Shard,
-    run: ToolRunResult,
-) -> list[ResultRow]:
-    doc_pages = [doc.pages for doc in shard.docs]
-    pages = reconcile_pages(run.pages, run.text, shard.pages)
-    texts = distribute_pages(pages, doc_pages)
-    rows: list[ResultRow] = []
-    features_by_doc = _feature_buckets(run.native_features, doc_pages)
-    for index, doc in enumerate(shard.docs):
-        text = texts[index]
-        features = features_by_doc[index]
-        _write_markdown(layout, tool, doc.uuid, text)
-        row = doc.result_row(tool)
-        row.update(run.timing.scaled(doc.pages / shard.pages))
-        row.update(score_text(text, doc.gt, features))
-        rows.append(row)
-    return rows
+def _shards(config):
+    import datasets
 
-
-def _run_tools(config: BenchmarkConfig, layout: ArtifactLayout, shards: list[Shard]):
-    rows: list[ResultRow] = []
-    for tool in config.tools:
-        with console.status(f"[bold green]Executing {tool}", spinner="dots"):
-            for shard in shards:
-                run = run_tool(tool, shard.merged_pdf, runs=config.runs)
-                rows.extend(_score_run(layout, tool, shard, run))
-    return rows_frame(rows)
-
-
-def _finish(config: BenchmarkConfig, layout: ArtifactLayout) -> Path:
-    if not layout.csv_path.exists():
-        if config.graph_only:
-            raise FileNotFoundError(
-                f"Cannot generate graphs: benchmark results were not found at "
-                f"{layout.csv_path}. Pass --output with the directory containing "
-                "benchmark.csv."
-            )
-        return layout.csv_path
-    saved = save_charts(layout.csv_path, config.output, config.tools)
-    if saved:
-        console.print(
-            f"[green]Generated {len(saved)} charts in {config.output}[/green]"
-        )
-    return layout.csv_path
-
-
-def run_benchmark(config: BenchmarkConfig) -> Path:
-    layout = ArtifactLayout(config.output)
-    layout.prepare_output()
-    if config.graph_only:
-        return _finish(config, layout)
-    layout.prepare_run()
-    rows = _run_tools(config, layout, _shards(layout, _samples(config)))
-    write_results(
-        layout.csv_path,
-        merge_results(layout.csv_path, rows, config.update_only),
-    )
-    return _finish(config, layout)
+    data = datasets.load_from_disk(config.dataset_path).shuffle(seed=config.seed)
+    data = data.select(range(min(config.max_rows or len(data), len(data))))
+    shards, batch, pages = [], [], 0
+    # PDF bytes live only until their shard is written, so peak memory is one
+    # shard's worth of documents rather than the whole dataset's.
+    for row in track(data, description="Loading samples..."):
+        doc = _doc(row)
+        batch.append((doc, row["pdf"]))
+        pages += doc.pages
+        if pages >= SHARD_PAGE_TARGET:
+            shards.append(_merge(config, len(shards), batch))
+            batch, pages = [], 0
+    return shards + ([_merge(config, len(shards), batch)] if batch else [])

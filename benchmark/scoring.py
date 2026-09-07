@@ -1,101 +1,164 @@
-"""Extraction quality and table scoring."""
+"""Turn Markdown and ground-truth HTML into comparable content, and score it."""
 
-from math import isfinite
+import json
 import re
+import unicodedata
+from math import isfinite
+from collections import Counter
 
+import Levenshtein
+import mistune
+from apted import APTED, Config
+from apted.helpers import Tree
+from lxml import html
 from rapidfuzz import fuzz
 from scipy.optimize import linear_sum_assignment
 from scipy.stats import kendalltau
 
-import benchmark.teds as teds
-from benchmark.normalize import FEATURE_KEYS, from_gt, from_text
-
-FeatureCounts = dict[str, int]
-
-
-def score_text(
-    text: str, gt_json: str, native_features: FeatureCounts | None = None
-) -> dict[str, float | int]:
-    gt_doc = from_gt(gt_json)
-    pred_doc = from_text(text)
-    table_data = _table_score(gt_doc.tables, pred_doc.tables)
-    counts = pred_doc.feature_counts()
-    if native_features:
-        for key in FEATURE_KEYS:
-            if key in native_features:
-                counts[key] = int(native_features[key])
-    counts["tables"] = max(counts["tables"], table_data["pred_tables"])
-    heuristic = _heuristic_score(gt_doc.text, "\n".join(pred_doc.text))
-    scores = {
-        "marker_heuristic_score": heuristic,
-        "marker_heuristic_score_median": heuristic,
-        "marker_heuristic_score_stdev": 0.0,
-    }
-    scores.update(counts)
-    scores.update(table_data)
-    return scores
+FEATURE_MAP = {
+    "heading": "headings",
+    "link": "links",
+    "table": "tables",
+    "image": "images",
+    "strong": "bold",
+    "emphasis": "italic",
+    "codespan": "code_blocks",
+    "block_code": "code_blocks",
+}
+FEATURE_KEYS = tuple(dict.fromkeys(FEATURE_MAP.values()))
+BLOCK_TAGS = ("h1", "h2", "h3", "h4", "h5", "h6", "p", "li")
+PAGE_SPLIT_RE = re.compile(r"\n\s*---\s*\n")
+MARKDOWN_AST = mistune.create_markdown(renderer=None, plugins=["table"])
+MARKDOWN_HTML = mistune.create_markdown(renderer="html", plugins=["table"])
 
 
-def _table_score(
-    gt_tables: list[str], pred_tables: list[str]
-) -> dict[str, float | int]:
-    matched = _match_tables(gt_tables, pred_tables)
+def score_text(text, gt_json, native_features=None):
+    gt_blocks, gt_tables = _parse(
+        str(item.get("html") or "") for item in json.loads(gt_json or "[]")
+    )
+    pages = PAGE_SPLIT_RE.split(text)
+    blocks, tables = _parse(str(MARKDOWN_HTML(page) or "") for page in pages)
+
+    markdown = Counter()
+    for page in pages:
+        markdown.update(_features(MARKDOWN_AST(page) or []))
+    # a tool reporting its own formatting counts overrides our Markdown parse
+    native = native_features or {}
+    counts = {key: int(native.get(key, markdown[key])) for key in FEATURE_KEYS}
+    counts["tables"] = max(counts["tables"], len(tables))
+
+    matched = _match_tables(gt_tables, tables)
     return {
+        "marker_heuristic_score": _heuristic_score(gt_blocks, "\n".join(blocks)),
         "table_teds": sum(matched) / len(gt_tables) if gt_tables else 1.0,
-        "table_precision": len(matched) / len(pred_tables) if pred_tables else 1.0,
-        "table_recall": len(matched) / len(gt_tables) if gt_tables else 1.0,
         "gt_tables": len(gt_tables),
-        "pred_tables": len(pred_tables),
+        "pred_tables": len(tables),
         "matched_tables": len(matched),
+        **counts,
     }
 
 
-def _match_tables(gt_tables: list[str], pred_tables: list[str]) -> list[float]:
-    if not gt_tables or not pred_tables:
-        return []
-    scores = [
-        [
-            teds.similarity_eval_html(
-                teds.wrap_table_html(pred_html)[:50000],
-                teds.wrap_table_html(gt_html)[:50000],
-            )
-            for pred_html in pred_tables[:50]
+def _parse(fragments):
+    blocks, tables = [], []
+    for fragment in fragments:
+        root = html.fragment_fromstring(
+            fragment.strip() or "<div></div>", create_parent=True
+        )
+        blocks += [
+            text for el in root.iter(*BLOCK_TAGS) if (text := _norm(el.text_content()))
         ]
-        for gt_html in gt_tables[:50]
-    ]
-    gt_indices, pred_indices = linear_sum_assignment(scores, maximize=True)
-    matched = []
-    for index, gt_index in enumerate(gt_indices):
-        pred_index = pred_indices[index]
-        matched.append(scores[gt_index][pred_index])
-    return [score for score in matched if score >= 0.1]
+        found = list(root.iter("table"))
+        blocks += [
+            _norm(" | ".join(cells))
+            for table in found
+            for row in table.xpath(".//tr")
+            if (cells := [_norm(c.text_content()) for c in row.xpath("./th|./td")])
+        ]
+        tables += [html.tostring(table, encoding="unicode") for table in found]
+    return blocks, tables
 
 
-def _heuristic_score(gt_blocks: list[str], pred_md: str) -> float:
+def _features(tokens):
+    counts = Counter()
+    stack = list(tokens)
+    while stack:
+        token = stack.pop()
+        if token.get("type") in FEATURE_MAP:
+            counts[FEATURE_MAP[token["type"]]] += 1
+        stack.extend(token.get("children") or [])
+    return counts
+
+
+def _norm(text):
+    text = unicodedata.normalize("NFKC", text).replace("\u00a0", " ")
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _clean(text):
+    text = re.sub(r"(?<!\\\$)\$(?:\$([^$]+)\$\$|\s*([^$\n]+?)\s*\$)", r"$\1\2$", text)
+    return re.sub(r"\s+", " ", text).strip().lower()
+
+
+def _heuristic_score(gt_blocks, pred_md):
     if not pred_md:
         return 0.0
     blocks = [_clean(block)[:4000] for block in gt_blocks if block]
     if not blocks:
         return 100.0
     pred = _clean(pred_md)[:8000]
+    aligned = [fuzz.partial_ratio_alignment(b, pred, score_cutoff=70) for b in blocks]
+    scores = [align.score if align else 0.0 for align in aligned]
     if len(blocks) == 1:
-        align = fuzz.partial_ratio_alignment(blocks[0], pred, score_cutoff=70)
-        return (align.score if align else 0.0) * 0.8 + 20.0
-    scores = [
-        fuzz.partial_ratio_alignment(block, pred, score_cutoff=70) for block in blocks
-    ]
-    starts = [align.dest_start if align else 0 for align in scores]
+        return scores[0] * 0.8 + 20.0
+    starts = [align.dest_start if align else 0 for align in aligned]
     weights = [len(block) for block in blocks]
-    statistic = kendalltau(
+    tau = kendalltau(
         range(len(starts)), sorted(range(len(starts)), key=starts.__getitem__)
     ).statistic
-    order = statistic if statistic is not None and isfinite(statistic) else 0.0
-    content = 0.0
-    for index, align in enumerate(scores):
-        content += (align.score if align else 0.0) * weights[index]
+    order = tau if tau is not None and isfinite(tau) else 0.0
+    content = sum(s * w for s, w in zip(scores, weights, strict=True))
     return (content / max(1, sum(weights))) * 0.8 + ((order + 1.0) * 50.0) * 0.2
 
 
-def _clean(text: str) -> str:
-    text = re.sub(r"(?<!\\\$)\$(?:\$([^$]+)\$\$|\s*([^$\n]+?)\s*\$)", r"$\1\2$", text)
-    return re.sub(r"\s+", " ", text).strip().lower()
+def _match_tables(gt_tables, pred_tables):
+    if not gt_tables or not pred_tables:
+        return []
+    scores = [[_teds(pred, gt) for pred in pred_tables[:50]] for gt in gt_tables[:50]]
+    pairs = zip(*linear_sum_assignment(scores, maximize=True), strict=True)
+    return [score for r, c in pairs if (score := scores[r][c]) >= 0.1]
+
+
+class _TableTree(Tree):
+    def __init__(self, node):  # noqa: D107
+        super().__init__(node.tag)
+        self.tag = node.tag
+        self.colspan = int(node.attrib.get("colspan", 1))
+        self.rowspan = int(node.attrib.get("rowspan", 1))
+        self.content = "".join(node.itertext()) if node.tag == "td" else ""
+        self.children = [_TableTree(child) for child in node]
+
+
+class _TableConfig(Config):
+    def rename(self, node1, node2):
+        shape1 = (node1.tag, node1.colspan, node1.rowspan)
+        shape2 = (node2.tag, node2.colspan, node2.rowspan)
+        if shape1 != shape2:
+            return 1
+        distance = Levenshtein.distance(node1.content, node2.content)
+        return int(distance / max(len(node1.content), len(node2.content), 1))
+
+
+def _teds(pred_html, true_html):
+    tables = [_table(fragment) for fragment in (pred_html, true_html)]
+    if any(table is None for table in tables):
+        return 0.0
+    nodes = max(len(table.xpath(".//*")) for table in tables)
+    if not nodes:
+        return 0.0
+    distance = APTED(*map(_TableTree, tables), _TableConfig()).compute_edit_distance()
+    return 1.0 - int(distance) / nodes
+
+
+def _table(fragment):
+    document = f"<html><body>{fragment.strip()}</body></html>"[:50000]
+    return next(iter(html.fromstring(document).xpath("body/table")), None)
