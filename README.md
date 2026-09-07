@@ -163,9 +163,7 @@ The committed benchmark uses 512 deterministic samples from `datalab-to/marker_b
 
 ### Charts
 
-| Text quality | Table fidelity |
-| --- | --- |
-| ![Text quality comparison](benchmark/results/text_score.png) | ![Table fidelity comparison](benchmark/results/teds.png) |
+![Text quality comparison](benchmark/results/text_score.png)
 
 ![Table precision and recall](benchmark/results/precision_recall.png)
 
