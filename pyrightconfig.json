@@ -3,7 +3,7 @@
   "exclude": ["**/__pycache__", ".venv"],
   "venvPath": ".",
   "venv": ".venv",
-  "pythonVersion": "3.11",
+  "pythonVersion": "3.14",
   "typeCheckingMode": "strict",
   "reportMissingTypeStubs": "none",
   "reportOptionalOperand": "none",
