@@ -33,7 +33,7 @@ jobs:
           mkdir -p mupdf lib/mupdf
           cp -R /tmp/mupdf/include mupdf/include
           curl -fsSL \
-            https://github.com/intercepted16/mupdf-prebuilts/releases/download/mupdf-1.27.0/libmupdf.so.27.0 \
+            https://github.com/aditbajaj/mupdf-prebuilts/releases/download/mupdf-1.27.0/libmupdf.so.27.0 \
             -o lib/mupdf/libmupdf.so.27.0
           ln -s libmupdf.so.27.0 lib/mupdf/libmupdf.so
 

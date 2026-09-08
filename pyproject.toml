@@ -42,9 +42,9 @@ benchmark = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/intercepted16/fibrumpdf"
-Repository = "https://github.com/intercepted16/fibrumpdf"
-Issues = "https://github.com/intercepted16/fibrumpdf/issues"
+Homepage = "https://github.com/aditbajaj/fibrumpdf"
+Repository = "https://github.com/aditbajaj/fibrumpdf"
+Issues = "https://github.com/aditbajaj/fibrumpdf/issues"
 
 [project.scripts]
 fibrum-pdf = "fibrum_pdf.main:main"
@@ -68,7 +68,7 @@ before-all = [
     "tar -C /usr/local -xzf go1.24.0.linux-amd64.tar.gz",
     "/usr/local/go/bin/go version",
     "mkdir -p lib/mupdf",
-    "curl -L -o lib/mupdf/libmupdf.so.27.0 https://github.com/intercepted16/mupdf-prebuilts/releases/download/mupdf-1.27.0/libmupdf.so.27.0",
+    "curl -L -o lib/mupdf/libmupdf.so.27.0 https://github.com/aditbajaj/mupdf-prebuilts/releases/download/mupdf-1.27.0/libmupdf.so.27.0",
     "ln -sf libmupdf.so.27.0 lib/mupdf/libmupdf.so",
     "chmod +x lib/mupdf/*.so*"
 ]
@@ -81,7 +81,7 @@ before-all = [
     "which go || brew install go@1.24 || true",
     "go version",
     "mkdir -p lib/mupdf",
-    "curl -L -o lib/mupdf/libmupdf.dylib https://github.com/intercepted16/mupdf-prebuilts/releases/download/mupdf-1.27.0/libmupdf.dylib",
+    "curl -L -o lib/mupdf/libmupdf.dylib https://github.com/aditbajaj/mupdf-prebuilts/releases/download/mupdf-1.27.0/libmupdf.dylib",
     "chmod +x lib/mupdf/*.dylib*"
 ]
 repair-wheel-command = """

@@ -53,16 +53,16 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force lib/mupdf | Out-Null
           Invoke-WebRequest `
-            -Uri "https://github.com/intercepted16/mupdf-prebuilts/releases/download/mupdf-1.27.0/libmupdf.dll" `
+            -Uri "https://github.com/aditbajaj/mupdf-prebuilts/releases/download/mupdf-1.27.0/libmupdf.dll" `
             -OutFile "lib/mupdf/libmupdf.dll"
           Invoke-WebRequest `
-            -Uri "https://github.com/intercepted16/mupdf-prebuilts/releases/download/mupdf-1.27.0/libmupdf.dll.a" `
+            -Uri "https://github.com/aditbajaj/mupdf-prebuilts/releases/download/mupdf-1.27.0/libmupdf.dll.a" `
             -OutFile "lib/mupdf/libmupdf.dll.a"
           Invoke-WebRequest `
-            -Uri "https://github.com/intercepted16/mupdf-prebuilts/releases/download/mupdf-1.27.0/libgcc_s_seh-1.dll" `
+            -Uri "https://github.com/aditbajaj/mupdf-prebuilts/releases/download/mupdf-1.27.0/libgcc_s_seh-1.dll" `
             -OutFile "lib/mupdf/libgcc_s_seh-1.dll"
           Invoke-WebRequest `
-            -Uri "https://github.com/intercepted16/mupdf-prebuilts/releases/download/mupdf-1.27.0/libwinpthread-1.dll" `
+            -Uri "https://github.com/aditbajaj/mupdf-prebuilts/releases/download/mupdf-1.27.0/libwinpthread-1.dll" `
             -OutFile "lib/mupdf/libwinpthread-1.dll"
 
       - name: Install uv

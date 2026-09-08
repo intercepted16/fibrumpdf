@@ -28,7 +28,7 @@ Create `lib/mupdf/` and place the runtime for the build platform there:
 | Windows | `libmupdf.dll` and its runtime DLL dependencies |
 
 The project's
-[MuPDF prebuilt releases](https://github.com/intercepted16/mupdf-prebuilts/releases/tag/mupdf-1.27.0)
+[MuPDF prebuilt releases](https://github.com/aditbajaj/mupdf-prebuilts/releases/tag/mupdf-1.27.0)
 contain the files used by CI. You can instead build MuPDF from the submodule:
 
 ```bash
