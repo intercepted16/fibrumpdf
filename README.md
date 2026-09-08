@@ -17,7 +17,7 @@ It uses MuPDF for the low-level PDF work and a set of layout heuristics to recon
 
 <img src="benchmark/results/demo.png" alt="Usage demo" width="420">
 
-[Benchmark details](#benchmark) · [Build from source](BUILD.md)
+[Installation](#install) · [Usage](#usage)
 
 ## Benchmark
 
