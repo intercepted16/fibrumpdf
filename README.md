@@ -1,5 +1,8 @@
 # FibrumPDF
 
+[![CI](https://github.com/aditbajaj/fibrumpdf/actions/workflows/ci.yml/badge.svg)](https://github.com/aditbajaj/fibrumpdf/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/fibrum-pdf.svg)](https://pypi.org/project/fibrum-pdf/)
+
 **Structured PDF extraction at 318 pages/second on CPU.**
 
 ![Speed comparison](benchmark/results/speed.png)
@@ -11,6 +14,8 @@ The idea is pretty simple: there are very fast PDF extractors that mostly give y
 FibrumPDF sits somewhere in the middle.
 
 It uses MuPDF for the low-level PDF work and a set of layout heuristics to reconstruct the document written in Go. There's no OCR, GPU or model inference.
+
+![Usage demo](benchmark/results/demo.png)
 
 [Benchmark details](#benchmark) · [Build from source](BUILD.md)
 
@@ -163,9 +168,15 @@ The committed benchmark uses 512 deterministic samples from `datalab-to/marker_b
 
 ### Charts
 
+Text quality is close to PyMuPDF4LLM and behind Docling:
+
 ![Text quality comparison](benchmark/results/text_score.png)
 
+Table precision and recall trail Docling by a wider margin than text quality does:
+
 ![Table precision and recall](benchmark/results/precision_recall.png)
+
+That gap is concentrated in a few document types, not spread evenly across all of them:
 
 ![Quality by document type](benchmark/results/heatmap.png)
 
