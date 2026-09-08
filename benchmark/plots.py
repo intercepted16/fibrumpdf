@@ -51,7 +51,7 @@ def save_charts(csv_path, out_dir, tools_order):
     out_dir.mkdir(parents=True, exist_ok=True)
     saved = [out_dir / f"{name}.png" for name in charts]
     for path, chart in zip(saved, charts.values(), strict=True):
-        chart.save(path)
+        chart.save(path, scale_factor=2.0 if path.stem == "speed" else 1.0)
     return saved
 
 

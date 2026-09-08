@@ -5,7 +5,7 @@
 
 **Structured PDF extraction at 318 pages/second on CPU.**
 
-![Speed comparison](benchmark/results/speed.png)
+<img src="benchmark/results/speed.png" alt="Speed comparison" width="900">
 
 FibrumPDF extracts PDFs into structured JSON or Markdown, preserving things like headings, lists, tables, reading order, links, formatting and layout information.
 
@@ -15,7 +15,7 @@ FibrumPDF sits somewhere in the middle.
 
 It uses MuPDF for the low-level PDF work and a set of layout heuristics to reconstruct the document written in Go. There's no OCR, GPU or model inference.
 
-![Usage demo](benchmark/results/demo.png)
+<img src="benchmark/results/demo.png" alt="Usage demo" width="420">
 
 [Benchmark details](#benchmark) · [Build from source](BUILD.md)
 
